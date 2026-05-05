@@ -34,15 +34,25 @@ class AIEngine:
         Demande à l'IA d'extraire une info et de la classer.
         """
         prompt = f"""
-        Analyse le message : "{last_user_message}"
-        Extraits-en une information importante si elle existe.
+        Analyse le message de l'utilisateur : "{last_user_message}"
+        Extraits-en une information importante si elle existe et classe-la selon ces règles strictes :
+        
+        1. "user_profile" : Si l'utilisateur parle de LUI-MÊME (ex: son nom, son âge, son métier).
+        2. "assistant_profile" : Si l'utilisateur parle de l'IA (ex: ton nom, ton rôle, ce que TU es).
+        3. "long_term_facts" : Si c'est un fait général ou une préférence (ex: "J'aime le café").
+        
         Réponds UNIQUEMENT en JSON sous ce format :
         {{
-            "categorie": "profil", "assistant" ou "fait",
+            "categorie": "user_profile" | "assistant_profile" | "long_term_facts",
             "cle": "nom_de_la_cle",
-            "valeur": "description de l'info"
+            "valeur": "contenu de l'information"
         }}
-        Note : "profil" est pour l'utilisateur, "assistant" pour l'IA elle-même.
+        
+        Exemples :
+        - "Je m'appelle Louis" -> {{"categorie": "user_profile", "cle": "nom", "valeur": "Louis"}}
+        - "Ton nom est Anna" -> {{"categorie": "assistant_profile", "cle": "nom", "valeur": "Anna"}}
+        - "J'aime le Python" -> {{"categorie": "long_term_facts", "cle": "langage", "valeur": "Aime le Python"}}
+        
         Si rien d'important, réponds : None
         """
         try:
