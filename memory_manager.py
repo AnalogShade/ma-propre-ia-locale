@@ -78,19 +78,25 @@ class MemoryManager:
         return self.history[-CONTEXT_WINDOW:]
 
     def get_user_info_summary(self):
-        """Crée une chaîne de caractères résumant ce qu'on sait de l'utilisateur."""
+        """Crée un résumé naturel des connaissances sur l'utilisateur."""
         if not self.user_profile and not self.facts:
             return ""
         
-        summary = "\nInfos sur l'utilisateur :\n"
-        for k, v in self.user_profile.items():
-            summary += f"- {k}: {v}\n"
+        summary = "\n--- CE QUE TU SAIS SUR L'HUMAIN (Louis) ---\n"
         
+        # Profil de base
+        for k, v in self.user_profile.items():
+            summary += f"- Son {k} est {v}\n"
+        
+        # Faits extraits
         if self.facts:
-            summary += "\nFaits marquants :\n"
+            summary += "\nFaits marquants et préférences :\n"
             for k, v in self.facts.items():
-                if v["count"] > 1: # On ne montre que les faits récurrents
+                # On ne montre que les faits confirmés (count > 1) ou importants
+                if v["count"] > 1:
                     summary += f"- {v['value']}\n"
+        
+        summary += "--- FIN DES CONNAISSANCES ---\n"
         return summary
 
     def clear(self):
