@@ -64,7 +64,10 @@ def main():
 
             if "profil" in cat:
                 memory.update_user_profile(cle, val)
-                print(f"  [Profil mis à jour : {cle} = {val}]")
+                print(f"  [Profil utilisateur mis à jour : {cle} = {val}]")
+            elif "assistant" in cat:
+                memory.update_assistant_profile(cle, val)
+                print(f"  [Profil assistant mis à jour : {cle} = {val}]")
             else:
                 memory.add_fact(cle, val)
                 print(f"  [Fait enregistré : {val}]")

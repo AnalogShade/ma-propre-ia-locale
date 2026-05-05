@@ -55,6 +55,10 @@ class MemoryManager:
         self.user_profile[key] = value
         self._save_file(USER_PROFILE_FILE, self.user_profile)
 
+    def update_assistant_profile(self, key, value):
+        self.assistant_profile[key] = value
+        self._save_file(ASSISTANT_PROFILE_FILE, self.assistant_profile)
+
     def add_fact(self, key, value):
         """Ajoute un fait ou incrémente son compteur s'il existe déjà."""
         if key in self.facts:

@@ -38,10 +38,11 @@ class AIEngine:
         Extraits-en une information importante si elle existe.
         Réponds UNIQUEMENT en JSON sous ce format :
         {{
-            "categorie": "profil" ou "fait",
+            "categorie": "profil", "assistant" ou "fait",
             "cle": "nom_de_la_cle",
             "valeur": "description de l'info"
         }}
+        Note : "profil" est pour l'utilisateur, "assistant" pour l'IA elle-même.
         Si rien d'important, réponds : None
         """
         try:
