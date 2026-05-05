@@ -8,24 +8,23 @@ class AIEngine:
 
     def get_response(self, context_messages, user_summary="", assistant_name=DEFAULT_NAME):
         try:
-            # On construit un prompt système clair
+            # 1. Construction du prompt système
             system_content = self.system_prompt.strip().format(name=assistant_name)
             if user_summary:
-                system_content += f"\nVoici ce que tu sais sur l'utilisateur :\n{user_summary}"
+                system_content += f"\nContexte utilisateur :\n{user_summary}"
 
-            # Debug: Affiche le nom ou le prompt final
-            print(f"  [DEBUG: Identité utilisée -> {assistant_name}]")
-
-            # On nettoie les messages pour ne garder que role et content (Ollama est sensible)
+            # 2. Nettoyage des messages (Strict: role et content uniquement)
             clean_context = [{"role": m["role"], "content": m["content"]} for m in context_messages]
             messages = [{'role': 'system', 'content': system_content}] + clean_context
             
+            # 3. Appel Ollama
             response = ollama.chat(model=self.model, messages=messages)
-            text = response['message']['content'].strip()
             
+            text = response['message']['content'].strip()
             return text if text else None
+            
         except Exception as e:
-            print(f"  [DEBUG: Erreur Ollama -> {e}]")
+            print(f"\n[DEBUG: Erreur critique Ollama -> {e}]")
             return None
 
     def extract_fact(self, last_user_message):

@@ -7,11 +7,9 @@ MODEL_NAME = "llama3"
 DEFAULT_NAME = "Antis"
 
 # Le prompt système définit la "personnalité" de l'IA.
-SYSTEM_PROMPT = """
-Tu es une IA locale nommée '{name}'. 
-Tu es utile, concise et tu as une personnalité amicale.
-Tu réponds toujours en français.
-"""
+SYSTEM_PROMPT = """Tu es {name}, une IA locale utile et amicale. 
+Tu réponds toujours en français de manière concise et naturelle.
+Utilise les informations du contexte utilisateur pour personnaliser tes réponses."""
 
 # --- PARAMÈTRES DE MÉMOIRE V2 ---
 

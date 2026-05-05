@@ -51,6 +51,11 @@ def main():
         assistant_name = memory.assistant_profile.get("nom", "Antis")
         print(f"\n{assistant_name} ({engine.model}) : ", end="", flush=True)
         
+        # On ajoute le message utilisateur à la mémoire AVANT de demander une réponse
+        # pour que l'IA voie le message actuel dans son historique
+        memory.add_message("user", user_input)
+        context = memory.get_context() # On recharge le contexte avec le nouveau message
+        
         response = engine.get_response(context, user_summary=user_summary, assistant_name=assistant_name)
         
         # Fallback si l'IA ne répond rien
@@ -60,9 +65,10 @@ def main():
             
         print(response)
 
-        # 5. MISE À JOUR DE LA MÉMOIRE (Conversation)
-        memory.add_message("user", user_input)
-        memory.add_message("assistant", response)
+        # 5. MISE À JOUR DE LA MÉMOIRE (Assistant)
+        # On n'ajoute à l'historique que les VRAIES réponses (pas le fallback d'erreur)
+        if response and "Ollama n'a pas renvoyé de texte" not in response:
+            memory.add_message("assistant", response)
 
         # 6. EXTRACTION SECONDAIRE (En arrière-plan du flux principal)
         info = engine.extract_fact(user_input)
