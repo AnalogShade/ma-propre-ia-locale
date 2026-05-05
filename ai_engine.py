@@ -7,53 +7,46 @@ class AIEngine:
         self.system_prompt = SYSTEM_PROMPT
 
     def get_response(self, context_messages, user_summary=""):
-        """
-        Envoie les messages à Ollama et récupère la réponse texte.
-        Injecte les infos utilisateur si présentes.
-        """
         try:
-            # On enrichit le prompt système avec ce qu'on sait de l'utilisateur
-            dynamic_system_prompt = self.system_prompt
+            # On construit un prompt système clair
+            system_content = self.system_prompt
             if user_summary:
-                dynamic_system_prompt += user_summary
+                system_content += f"\nVoici ce que tu sais sur l'utilisateur :\n{user_summary}"
 
-            messages_to_send = [
-                {'role': 'system', 'content': dynamic_system_prompt}
-            ] + context_messages
+            messages = [{'role': 'system', 'content': system_content}] + context_messages
             
-            response = ollama.chat(
-                model=self.model,
-                messages=messages_to_send,
-            )
-            return response['message']['content']
+            response = ollama.chat(model=self.model, messages=messages)
+            text = response['message']['content']
+            
+            return text if text.strip() else "(L'IA n'a pas renvoyé de texte)"
         except Exception as e:
-            return f"Erreur de communication avec Ollama : {str(e)}"
+            return f"Erreur : {str(e)}"
 
     def extract_fact(self, last_user_message):
         """
         Demande à l'IA d'extraire une info et de la classer.
         """
         prompt = f"""
-        Analyse le message de l'utilisateur : "{last_user_message}"
-        Extraits-en une information importante si elle existe et classe-la selon ces règles strictes :
+        MESSAGE À ANALYSER : "{last_user_message}"
         
-        1. "user_profile" : Si l'utilisateur parle de LUI-MÊME (ex: son nom, son âge, son métier).
-        2. "assistant_profile" : Si l'utilisateur parle de l'IA (ex: ton nom, ton rôle, ce que TU es).
-        3. "long_term_facts" : Si c'est un fait général ou une préférence (ex: "J'aime le café").
+        INSTRUCTION : Extraits un fait et CLASSE-LE impérativement selon ces règles de grammaire :
         
-        Réponds UNIQUEMENT en JSON sous ce format :
+        - Si le message dit "TU", "TON", "TA" ou parle de l'IA -> categorie: "assistant_profile"
+        - Si le message dit "JE", "MON", "MA" ou parle de l'humain -> categorie: "user_profile"
+        - Si c'est une info générale ou une préférence sans sujet précis -> categorie: "long_term_facts"
+        
+        FORMAT DE RÉPONSE (JSON UNIQUEMENT) :
         {{
-            "categorie": "user_profile" | "assistant_profile" | "long_term_facts",
+            "categorie": "user_profile", "assistant_profile" ou "long_term_facts",
             "cle": "nom_de_la_cle",
-            "valeur": "contenu de l'information"
+            "valeur": "contenu"
         }}
         
-        Exemples :
-        - "Je m'appelle Louis" -> {{"categorie": "user_profile", "cle": "nom", "valeur": "Louis"}}
+        EXEMPLES :
         - "Ton nom est Anna" -> {{"categorie": "assistant_profile", "cle": "nom", "valeur": "Anna"}}
-        - "J'aime le Python" -> {{"categorie": "long_term_facts", "cle": "langage", "valeur": "Aime le Python"}}
+        - "Je suis Louis" -> {{"categorie": "user_profile", "cle": "nom", "valeur": "Louis"}}
         
-        Si rien d'important, réponds : None
+        SI AUCUNE INFO : Réponds "None"
         """
         try:
             response = ollama.generate(model=self.model, prompt=prompt)

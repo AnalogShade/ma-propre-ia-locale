@@ -62,15 +62,17 @@ def main():
             cle = info["cle"]
             val = info["valeur"]
 
-            if "user_profile" in cat:
+            if cat == "user_profile":
                 memory.update_user_profile(cle, val)
-                print(f"  [Profil utilisateur mis à jour : {cle} = {val}]")
-            elif "assistant_profile" in cat:
+                print(f"  [LOG: Profil utilisateur -> {cle}: {val}]")
+            elif cat == "assistant_profile":
                 memory.update_assistant_profile(cle, val)
-                print(f"  [Profil assistant mis à jour : {cle} = {val}]")
+                print(f"  [LOG: Profil assistant -> {cle}: {val}]")
             else:
                 memory.add_fact(cle, val)
-                print(f"  [Fait enregistré : {val}]")
+                print(f"  [LOG: Fait -> {val}]")
+        elif info:
+            print(f"  [DEBUG: L'IA a renvoyé un format inconnu : {info}]")
 
 if __name__ == "__main__":
     main()
