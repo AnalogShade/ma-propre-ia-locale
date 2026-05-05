@@ -11,11 +11,18 @@ Tu es utile, concise et tu as une personnalité amicale.
 Tu réponds toujours en français.
 """
 
-# --- PARAMÈTRES DE MÉMOIRE ---
+# --- PARAMÈTRES DE MÉMOIRE V2 ---
 
-# Chemin vers le fichier qui stocke l'historique
-MEMORY_FILE = "data/memory.json"
+# Historique court terme (Conversation en cours)
+HISTORY_FILE = "data/history.json"
+MAX_HISTORY = 100 # Nombre de messages max dans l'historique brut
 
-# Nombre maximum de messages envoyés au modèle pour garder du contexte
-# (Évite de saturer la mémoire du modèle sur de longues discussions)
+# Profils (Informations stables)
+USER_PROFILE_FILE = "data/user_profile.json"
+ASSISTANT_PROFILE_FILE = "data/assistant_profile.json"
+
+# Mémoire long terme (Faits extraits)
+FACTS_FILE = "data/long_term_facts.json"
+
+# Nombre de messages récents envoyés à l'IA pour le contexte immédiat
 CONTEXT_WINDOW = 20

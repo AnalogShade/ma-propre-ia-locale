@@ -15,13 +15,17 @@ def main():
     print("----------------------------------------------")
 
     while True:
-        # 1. Entrée utilisateur
+        # 1. Préparation du contexte (Profil + Historique)
+        user_summary = memory.get_user_info_summary()
+        context = memory.get_context()
+
+        # 2. Entrée utilisateur
         user_input = input("\nVous : ").strip()
 
         if not user_input:
             continue
 
-        # 2. Gestion des commandes spécialisées
+        # 3. Gestion des commandes
         if user_input.startswith('/'):
             parts = user_input.split(' ')
             cmd = parts[0].lower()
@@ -29,39 +33,35 @@ def main():
             if cmd == '/quit':
                 print("Au revoir !")
                 break
-
             elif cmd == '/clear':
-                confirm = input("Voulez-vous vraiment effacer la mémoire ? (o/n) : ")
+                confirm = input("Effacer l'historique court terme ? (o/n) : ")
                 if confirm.lower() == 'o':
                     memory.clear()
-                    print("Mémoire réinitialisée.")
                 continue
-
             elif cmd == '/model':
                 if len(parts) > 1:
-                    new_model = parts[1]
-                    engine.model = new_model
-                    print(f"Modèle changé pour : {new_model}")
-                else:
-                    print("Usage: /model <nom_du_modele>")
+                    engine.model = parts[1]
+                    print(f"Modèle : {engine.model}")
                 continue
 
-        # 3. Traitement de la conversation
-        # On ajoute le message de l'utilisateur à la mémoire
-        memory.add_message("user", user_input)
-
-        # On récupère les derniers messages pour donner du contexte à l'IA
-        context = memory.get_context()
-
-        # On affiche le début de la réponse
+        # 4. Traitement de la conversation
         print(f"\nAntis ({engine.model}) : ", end="", flush=True)
         
-        # On demande la réponse à Ollama
-        response = engine.get_response(context)
+        # On passe le résumé utilisateur pour que l'IA sache à qui elle parle
+        response = engine.get_response(context, user_summary=user_summary)
         print(response)
 
-        # On enregistre la réponse de l'IA dans la mémoire
+        # 5. Mise à jour de la mémoire
+        memory.add_message("user", user_input)
         memory.add_message("assistant", response)
+
+        # 6. Extraction de faits (en arrière-plan "mental")
+        fact = engine.extract_fact(user_input)
+        if fact:
+            for key, value in fact.items():
+                memory.add_fact(key, value)
+                # Petit indicateur discret
+                print(f"  [Mémoire : {value}]")
 
 if __name__ == "__main__":
     main()
