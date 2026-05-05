@@ -4,9 +4,11 @@
 # Assure-toi d'avoir fait 'ollama pull <nom_du_modele>' avant.
 MODEL_NAME = "llama3"
 
+DEFAULT_NAME = "Antis"
+
 # Le prompt système définit la "personnalité" de l'IA.
 SYSTEM_PROMPT = """
-Tu es une IA locale nommée 'Antis'. 
+Tu es une IA locale nommée '{name}'. 
 Tu es utile, concise et tu as une personnalité amicale.
 Tu réponds toujours en français.
 """

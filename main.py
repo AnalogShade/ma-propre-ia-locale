@@ -7,8 +7,11 @@ def main():
     engine = AIEngine()
     memory = MemoryManager()
     
+    # Récupération du nom de l'assistant (Priorité au profil)
+    assistant_name = memory.assistant_profile.get("nom", "Antis")
+
     print("==============================================")
-    print("   ANTIS - VOTRE IA LOCALE (v1)   ")
+    print(f"   {assistant_name.upper()} - VOTRE IA LOCALE (v1)   ")
     print("==============================================")
     print(f"Modèle : {engine.model}")
     print("Commandes : /quit, /clear, /model <nom>")
@@ -44,18 +47,24 @@ def main():
                     print(f"Modèle : {engine.model}")
                 continue
 
-        # 4. Traitement de la conversation
-        print(f"\nAntis ({engine.model}) : ", end="", flush=True)
+        # 4. GÉNÉRATION DE LA RÉPONSE
+        assistant_name = memory.assistant_profile.get("nom", "Antis")
+        print(f"\n{assistant_name} ({engine.model}) : ", end="", flush=True)
         
-        # On passe le résumé utilisateur pour que l'IA sache à qui elle parle
-        response = engine.get_response(context, user_summary=user_summary)
+        response = engine.get_response(context, user_summary=user_summary, assistant_name=assistant_name)
+        
+        # Fallback si l'IA ne répond rien
+        if not response:
+            user_name = memory.user_profile.get("prénom", memory.user_profile.get("nom", "Louis"))
+            response = f"Salut {user_name}, je suis là. (Ollama n'a pas renvoyé de texte)"
+            
         print(response)
 
-        # 5. Mise à jour de la mémoire
+        # 5. MISE À JOUR DE LA MÉMOIRE (Conversation)
         memory.add_message("user", user_input)
         memory.add_message("assistant", response)
 
-        # 6. Extraction et classement automatique (Le "trieur")
+        # 6. EXTRACTION SECONDAIRE (En arrière-plan du flux principal)
         info = engine.extract_fact(user_input)
         if info and "categorie" in info:
             cat = info["categorie"].lower()
