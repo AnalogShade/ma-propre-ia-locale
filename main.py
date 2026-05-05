@@ -55,13 +55,19 @@ def main():
         memory.add_message("user", user_input)
         memory.add_message("assistant", response)
 
-        # 6. Extraction de faits (en arrière-plan "mental")
-        fact = engine.extract_fact(user_input)
-        if fact:
-            for key, value in fact.items():
-                memory.add_fact(key, value)
-                # Petit indicateur discret
-                print(f"  [Mémoire : {value}]")
+        # 6. Extraction et classement automatique (Le "trieur")
+        info = engine.extract_fact(user_input)
+        if info and "categorie" in info:
+            cat = info["categorie"].lower()
+            cle = info["cle"]
+            val = info["valeur"]
+
+            if "profil" in cat:
+                memory.update_user_profile(cle, val)
+                print(f"  [Profil mis à jour : {cle} = {val}]")
+            else:
+                memory.add_fact(cle, val)
+                print(f"  [Fait enregistré : {val}]")
 
 if __name__ == "__main__":
     main()

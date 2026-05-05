@@ -31,14 +31,18 @@ class AIEngine:
 
     def extract_fact(self, last_user_message):
         """
-        Demande à l'IA d'extraire un fait unique du message utilisateur.
-        Retourne un dictionnaire {clé: valeur} ou None.
+        Demande à l'IA d'extraire une info et de la classer.
         """
         prompt = f"""
-        Analyse le message suivant de l'utilisateur : "{last_user_message}"
-        Extraits-en une SEULE information importante (nom, projet, préférence, fait marquant).
-        Réponds UNIQUEMENT sous la forme d'un JSON simple comme ceci : {{"cle_courte": "description du fait"}}
-        Si aucune information importante n'est présente, réponds : None
+        Analyse le message : "{last_user_message}"
+        Extraits-en une information importante si elle existe.
+        Réponds UNIQUEMENT en JSON sous ce format :
+        {{
+            "categorie": "profil" ou "fait",
+            "cle": "nom_de_la_cle",
+            "valeur": "description de l'info"
+        }}
+        Si rien d'important, réponds : None
         """
         try:
             response = ollama.generate(model=self.model, prompt=prompt)
@@ -46,7 +50,6 @@ class AIEngine:
             if "None" in content or "{" not in content:
                 return None
             
-            # On essaie d'extraire le JSON du texte
             import json
             start = content.find("{")
             end = content.rfind("}") + 1
