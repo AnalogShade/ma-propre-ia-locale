@@ -11,36 +11,36 @@ class AnnaGUI:
         self.root = tk.Tk()
         self.root.title("ANNA - IA Locale")
         self.root.geometry("800x600")
-        self.root.configure(bg="#2c3e50")
+        self.root.configure(bg="#121212") # Noir profond
 
         # Layout principal (Gauche: Avatar | Droite: Chat)
-        self.main_container = tk.Frame(self.root, bg="#2c3e50")
+        self.main_container = tk.Frame(self.root, bg="#121212")
         self.main_container.pack(expand=True, fill="both", padx=10, pady=10)
 
         # Zone Gauche : Avatar Placeholder
-        self.left_frame = tk.Frame(self.main_container, bg="#34495e", width=256, height=256)
+        self.left_frame = tk.Frame(self.main_container, bg="#1e1e1e", width=256, height=256, highlightbackground="#333333", highlightthickness=1)
         self.left_frame.pack(side="left", padx=10, pady=10, anchor="n")
-        self.left_frame.pack_propagate(False) # Garde la taille fixe
+        self.left_frame.pack_propagate(False) 
         
-        self.avatar_label = tk.Label(self.left_frame, text="Avatar Anna\n(256x256)", bg="#34495e", fg="white", font=("Arial", 12))
+        self.avatar_label = tk.Label(self.left_frame, text="Avatar Anna\n(256x256)", bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 12))
         self.avatar_label.place(relx=0.5, rely=0.5, anchor="center")
 
         # Zone Droite : Conversation
-        self.right_frame = tk.Frame(self.main_container, bg="#2c3e50")
+        self.right_frame = tk.Frame(self.main_container, bg="#121212")
         self.right_frame.pack(side="right", expand=True, fill="both")
 
-        self.chat_area = scrolledtext.ScrolledText(self.right_frame, wrap=tk.WORD, state='disabled', font=("Arial", 11), bg="#ecf0f1", fg="#2c3e50")
+        self.chat_area = scrolledtext.ScrolledText(self.right_frame, wrap=tk.WORD, state='disabled', font=("Arial", 11), bg="#1e1e1e", fg="#e0e0e0", insertbackground="white", bd=0)
         self.chat_area.pack(expand=True, fill="both", padx=5, pady=5)
 
         # Zone de saisie
-        self.input_frame = tk.Frame(self.right_frame, bg="#2c3e50")
+        self.input_frame = tk.Frame(self.right_frame, bg="#121212")
         self.input_frame.pack(fill="x", padx=5, pady=5)
 
-        self.user_input = tk.Entry(self.input_frame, font=("Arial", 12))
+        self.user_input = tk.Entry(self.input_frame, font=("Arial", 12), bg="#333333", fg="white", insertbackground="white", relief="flat", bd=5)
         self.user_input.pack(side="left", expand=True, fill="x", padx=(0, 10))
         self.user_input.bind("<Return>", lambda e: self.send_message())
 
-        self.send_button = tk.Button(self.input_frame, text="Envoyer", command=self.send_message, bg="#3498db", fg="white", font=("Arial", 10, "bold"))
+        self.send_button = tk.Button(self.input_frame, text="Envoyer", command=self.send_message, bg="#333333", fg="white", activebackground="#444444", activeforeground="white", relief="flat", padx=15)
         self.send_button.pack(side="right")
 
         # Message de bienvenue
@@ -52,8 +52,8 @@ class AnnaGUI:
         self.chat_area.insert(tk.END, f"{message}\n")
         self.chat_area.config(state='disabled')
         self.chat_area.yview(tk.END)
-        # Ajout d'un tag pour le gras
-        self.chat_area.tag_config("bold", font=("Arial", 11, "bold"))
+        # Couleurs des tags pour le mode sombre
+        self.chat_area.tag_config("bold", font=("Arial", 11, "bold"), foreground="#bb86fc") # Une touche de violet pour les noms
 
     def send_message(self):
         msg = self.user_input.get().strip()
