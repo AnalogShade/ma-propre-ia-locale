@@ -43,22 +43,24 @@ class AnnaGUI:
         self.input_frame = tk.Frame(self.right_frame, bg="#121212")
         self.input_frame.pack(fill="x", padx=5, pady=5)
 
+        # On place d'abord les boutons à droite pour qu'ils soient prioritaires
+        self.help_button = tk.Button(self.input_frame, text=" ? ", command=self.show_help, bg="#444444", fg="white", activebackground="#666666", activeforeground="white", relief="flat", padx=10)
+        self.help_button.pack(side="right", fill="y", padx=(5, 0))
+
+        self.send_button = tk.Button(self.input_frame, text="Envoyer", command=self.send_message, bg="#333333", fg="white", activebackground="#444444", activeforeground="white", relief="flat", padx=15)
+        self.send_button.pack(side="right", fill="y", padx=(5, 0))
+
+        # Puis la zone de texte qui prend tout le reste de la place
         self.user_input = tk.Text(self.input_frame, font=("Arial", 11), bg="#333333", fg="white", 
                                   insertbackground="white", relief="flat", bd=5, height=3)
-        self.user_input.pack(side="left", expand=True, fill="x", padx=(0, 10))
+        self.user_input.pack(side="left", expand=True, fill="x")
         
-        # Bindings pour gérer Entrée et Shift+Entrée
+        # Bindings
         self.user_input.bind("<Return>", self.handle_return)
         self.user_input.bind("<Shift-Return>", self.handle_shift_return)
 
-        self.send_button = tk.Button(self.input_frame, text="Envoyer", command=self.send_message, bg="#333333", fg="white", activebackground="#444444", activeforeground="white", relief="flat", padx=15)
-        self.send_button.pack(side="right", fill="y")
-
-        self.help_button = tk.Button(self.input_frame, text="?", command=self.show_help, bg="#333333", fg="#bb86fc", activebackground="#444444", activeforeground="white", relief="flat", padx=10)
-        self.help_button.pack(side="right", fill="y", padx=(0, 5))
-
         # Message de bienvenue
-        self.append_chat("Système", "Bienvenue ! Anna est prête. Tape /help pour voir les commandes.")
+        self.append_chat("Système", "Bienvenue ! Anna est prête. Clique sur le bouton '?' ou tape /help pour l'aide.")
 
     def load_avatar(self):
         """Cherche une image dans le dossier avatar et l'affiche."""
