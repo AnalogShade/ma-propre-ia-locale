@@ -37,16 +37,20 @@ class AnnaGUI:
         self.chat_area = scrolledtext.ScrolledText(self.right_frame, wrap=tk.WORD, state='disabled', font=("Arial", 11), bg="#1e1e1e", fg="#e0e0e0", insertbackground="white", bd=0)
         self.chat_area.pack(expand=True, fill="both", padx=5, pady=5)
 
-        # Zone de saisie
+        # Zone de saisie (tk.Text pour permettre le multi-ligne)
         self.input_frame = tk.Frame(self.right_frame, bg="#121212")
         self.input_frame.pack(fill="x", padx=5, pady=5)
 
-        self.user_input = tk.Entry(self.input_frame, font=("Arial", 12), bg="#333333", fg="white", insertbackground="white", relief="flat", bd=5)
+        self.user_input = tk.Text(self.input_frame, font=("Arial", 11), bg="#333333", fg="white", 
+                                  insertbackground="white", relief="flat", bd=5, height=3)
         self.user_input.pack(side="left", expand=True, fill="x", padx=(0, 10))
-        self.user_input.bind("<Return>", lambda e: self.send_message())
+        
+        # Bindings pour gérer Entrée et Shift+Entrée
+        self.user_input.bind("<Return>", self.handle_return)
+        self.user_input.bind("<Shift-Return>", self.handle_shift_return)
 
         self.send_button = tk.Button(self.input_frame, text="Envoyer", command=self.send_message, bg="#333333", fg="white", activebackground="#444444", activeforeground="white", relief="flat", padx=15)
-        self.send_button.pack(side="right")
+        self.send_button.pack(side="right", fill="y")
 
         # Message de bienvenue
         self.append_chat("Système", "Bienvenue ! Anna est prête.")
@@ -83,13 +87,22 @@ class AnnaGUI:
         # Couleurs des tags pour le mode sombre
         self.chat_area.tag_config("bold", font=("Arial", 11, "bold"), foreground="#bb86fc") # Une touche de violet pour les noms
 
+    def handle_return(self, event):
+        """Envoie le message sur Entrée simple."""
+        self.send_message()
+        return "break" # Empêche le saut de ligne par défaut
+
+    def handle_shift_return(self, event):
+        """Laisse faire le saut de ligne sur Shift+Entrée."""
+        pass
+
     def send_message(self):
-        msg = self.user_input.get().strip()
+        msg = self.user_input.get("1.0", tk.END).strip()
         if not msg:
             return
 
         self.append_chat("Vous", msg)
-        self.user_input.delete(0, tk.END)
+        self.user_input.delete("1.0", tk.END)
 
         # Lancer le traitement dans un thread pour ne pas geler l'interface
         threading.Thread(target=self.process_ai_response, args=(msg,), daemon=True).start()
