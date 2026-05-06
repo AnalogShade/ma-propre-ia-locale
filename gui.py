@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import scrolledtext
 import threading
+import os
+from PIL import Image, ImageTk
 
 class AnnaGUI:
     def __init__(self, engine, memory):
@@ -25,6 +27,9 @@ class AnnaGUI:
         self.avatar_label = tk.Label(self.left_frame, text="Avatar Anna\n(256x256)", bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 12))
         self.avatar_label.place(relx=0.5, rely=0.5, anchor="center")
 
+        # Chargement de l'image d'avatar
+        self.load_avatar()
+
         # Zone Droite : Conversation
         self.right_frame = tk.Frame(self.main_container, bg="#121212")
         self.right_frame.pack(side="right", expand=True, fill="both")
@@ -45,6 +50,29 @@ class AnnaGUI:
 
         # Message de bienvenue
         self.append_chat("Système", "Bienvenue ! Anna est prête.")
+
+    def load_avatar(self):
+        """Cherche une image dans le dossier avatar et l'affiche."""
+        avatar_dir = "avatar"
+        if not os.path.exists(avatar_dir):
+            return
+
+        # On cherche le premier fichier image
+        valid_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp')
+        images = [f for f in os.listdir(avatar_dir) if f.lower().endswith(valid_extensions)]
+
+        if images:
+            try:
+                img_path = os.path.join(avatar_dir, images[0])
+                # Ouvrir et redimensionner
+                img = Image.open(img_path)
+                img = img.resize((256, 256), Image.Resampling.LANCZOS)
+                
+                # Convertir pour Tkinter
+                self.tk_avatar = ImageTk.PhotoImage(img)
+                self.avatar_label.config(image=self.tk_avatar, text="")
+            except Exception as e:
+                print(f"Erreur chargement avatar: {e}")
 
     def append_chat(self, sender, message):
         self.chat_area.config(state='normal')
