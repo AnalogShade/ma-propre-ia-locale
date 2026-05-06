@@ -4,12 +4,14 @@ import threading
 import os
 from PIL import Image, ImageTk
 from file_manager import FileManager
+from intent_router import IntentRouter
 
 class AnnaGUI:
     def __init__(self, engine, memory):
         self.engine = engine
         self.memory = memory
         self.files = FileManager()
+        self.router = IntentRouter()
         
         # Fenêtre principale
         self.root = tk.Tk()
@@ -107,6 +109,12 @@ class AnnaGUI:
         """Affiche la liste des commandes disponibles."""
         help_text = """COMMANDES DISPONIBLES :
 
+Langage Naturel :
+- "Ouvre le fichier <chemin>"
+- "Ferme le fichier"
+- "Recharge le fichier"
+
+Commandes Slash :
 /openfile <chemin> : Charger un fichier texte
 /listfiles : Voir les fichiers chargés
 /closefile <nom> : Fermer un fichier
@@ -117,6 +125,33 @@ class AnnaGUI:
 
 Note : Shift + Entrée pour un saut de ligne."""
         messagebox.showinfo("Aide - Commandes", help_text)
+
+    def handle_file_intent(self, text):
+        """Utilise Llama 3 pour détecter l'intention sur les fichiers."""
+        intent = self.router.get_file_intent(text)
+        action = intent.get("action")
+        path = intent.get("path")
+
+        if action == "none":
+            return False
+
+        # Exécution de l'action détectée par l'IA
+        if action == "open_file" and path:
+            success, msg = self.files.load_file(path)
+            self.append_chat("Système", msg)
+            return True
+        elif action == "close_file":
+            if self.files.current_file_path:
+                success, msg = self.files.close_file(self.files.current_file_path)
+                self.append_chat("Système", msg)
+                return True
+        elif action == "reload_file":
+            if self.files.current_file_path:
+                success, msg = self.files.load_file(self.files.current_file_path)
+                self.append_chat("Système", f"{msg} (Rechargé)")
+                return True
+        
+        return False
 
     def send_message(self):
         msg = self.user_input.get("1.0", tk.END).strip()
@@ -152,6 +187,13 @@ Note : Shift + Entrée pour un saut de ligne."""
             elif cmd == '/help':
                 self.show_help()
                 return
+
+        # Détection langage naturel pour les fichiers
+        if self.handle_file_intent(msg):
+            # Si une action fichier a été faite, on peut soit s'arrêter là,
+            # soit continuer pour qu'Anna réagisse. 
+            # Pour l'instant, on laisse Anna répondre à la phrase normalement.
+            pass
 
         self.append_chat("Vous", msg)
 

@@ -4,10 +4,38 @@ from memory_manager import MemoryManager
 from config import MODEL_NAME
 from gui import AnnaGUI
 from file_manager import FileManager
+from intent_router import IntentRouter
+
+def handle_file_intent(text, files, router):
+    """Utilise Llama 3 pour détecter l'intention sur les fichiers."""
+    intent = router.get_file_intent(text)
+    action = intent.get("action")
+    path = intent.get("path")
+
+    if action == "none":
+        return False
+
+    # Exécution de l'action
+    if action == "open_file" and path:
+        success, msg = files.load_file(path)
+        print(f"  [SYSTÈME: {msg}]")
+        return True
+    elif action == "close_file":
+        if files.current_file_path:
+            success, msg = files.close_file(files.current_file_path)
+            print(f"  [SYSTÈME: {msg}]")
+            return True
+    elif action == "reload_file":
+        if files.current_file_path:
+            success, msg = files.load_file(files.current_file_path)
+            print(f"  [SYSTÈME: {msg} (Rechargé)]")
+            return True
+    return False
 
 def run_console(engine, memory):
     """Lance la version console de l'application."""
     files = FileManager()
+    router = IntentRouter()
     assistant_name = memory.assistant_profile.get("nom", "Antis")
     print("==============================================")
     print(f"   {assistant_name.upper()} - MODE CONSOLE (v1)   ")
@@ -54,6 +82,9 @@ def run_console(engine, memory):
                     success, msg = files.load_file(parts[1])
                     print(f"  [SYSTÈME: {msg} (Rechargé)]")
                 continue
+
+        # Détection langage naturel pour les fichiers
+        handle_file_intent(user_input, files, router)
 
         # Logique de réponse
         assistant_name = memory.assistant_profile.get("nom", "Antis")

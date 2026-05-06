@@ -4,10 +4,14 @@ import time
 class FileManager:
     def __init__(self, max_chars=10000):
         self.loaded_files = {} # {path: {"content": str, "last_mod": float, "is_truncated": bool}}
-        self.max_chars = max_chars # Limite pour éviter de saturer le contexte de l'IA
+        self.max_chars = max_chars 
+        self.current_file_path = None # Chemin du fichier actif
 
     def load_file(self, path):
-        """Charge un fichier texte en mémoire."""
+        """Charge un fichier texte et le définit comme fichier actif."""
+        # Pour la v1, on limite à un seul fichier : on vide les anciens
+        self.loaded_files.clear()
+        self.current_file_path = None
         if not os.path.exists(path):
             return False, "Le fichier n'existe pas."
 
@@ -30,6 +34,7 @@ class FileManager:
                 "is_truncated": is_truncated,
                 "name": os.path.basename(path)
             }
+            self.current_file_path = path
 
             msg = f"Fichier '{os.path.basename(path)}' chargé."
             if is_truncated:
@@ -51,6 +56,8 @@ class FileManager:
         
         if to_delete:
             del self.loaded_files[to_delete]
+            if self.current_file_path == to_delete:
+                self.current_file_path = None
             return True, f"Fichier '{os.path.basename(to_delete)}' fermé."
         return False, "Fichier non trouvé dans la liste des fichiers ouverts."
 
@@ -70,9 +77,10 @@ class FileManager:
         if not self.loaded_files:
             return ""
 
-        context = "\n--- DOCUMENTS ACTUELLEMENT OUVERTS ---\n"
+        context = "\n--- DOCUMENT ACTIF (ANALYSE EN COURS) ---\n"
         for path, data in self.loaded_files.items():
-            context += f"NOM DU FICHIER : {data['name']}\n"
+            context += f"FICHIER : {data['name']}\n"
+            context += f"CHEMIN : {path}\n"
             context += f"CONTENU :\n{data['content']}\n"
             if data["is_truncated"]:
                 context += "... [CONTENU TRONQUÉ POUR LE CONTEXTE] ...\n"
