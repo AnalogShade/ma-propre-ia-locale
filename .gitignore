@@ -7,3 +7,4 @@ data/*.json
 
 # Fichier de config (Optionnel, mais souvent gardé pour le modèle par défaut)
 # config.py
+avatar/00000-3620528860.png
