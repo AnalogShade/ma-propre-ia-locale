@@ -1,13 +1,15 @@
 import tkinter as tk
-from tkinter import scrolledtext
+from tkinter import scrolledtext, messagebox
 import threading
 import os
 from PIL import Image, ImageTk
+from file_manager import FileManager
 
 class AnnaGUI:
     def __init__(self, engine, memory):
         self.engine = engine
         self.memory = memory
+        self.files = FileManager()
         
         # Fenêtre principale
         self.root = tk.Tk()
@@ -52,8 +54,11 @@ class AnnaGUI:
         self.send_button = tk.Button(self.input_frame, text="Envoyer", command=self.send_message, bg="#333333", fg="white", activebackground="#444444", activeforeground="white", relief="flat", padx=15)
         self.send_button.pack(side="right", fill="y")
 
+        self.help_button = tk.Button(self.input_frame, text="?", command=self.show_help, bg="#333333", fg="#bb86fc", activebackground="#444444", activeforeground="white", relief="flat", padx=10)
+        self.help_button.pack(side="right", fill="y", padx=(0, 5))
+
         # Message de bienvenue
-        self.append_chat("Système", "Bienvenue ! Anna est prête.")
+        self.append_chat("Système", "Bienvenue ! Anna est prête. Tape /help pour voir les commandes.")
 
     def load_avatar(self):
         """Cherche une image dans le dossier avatar et l'affiche."""
@@ -96,13 +101,57 @@ class AnnaGUI:
         """Laisse faire le saut de ligne sur Shift+Entrée."""
         pass
 
+    def show_help(self):
+        """Affiche la liste des commandes disponibles."""
+        help_text = """COMMANDES DISPONIBLES :
+
+/openfile <chemin> : Charger un fichier texte
+/listfiles : Voir les fichiers chargés
+/closefile <nom> : Fermer un fichier
+/reloadfile <nom> : Recharger un fichier modifié
+/clear : Effacer l'historique de discussion
+/model <nom> : Changer le modèle Ollama
+/quit : Quitter l'application
+
+Note : Shift + Entrée pour un saut de ligne."""
+        messagebox.showinfo("Aide - Commandes", help_text)
+
     def send_message(self):
         msg = self.user_input.get("1.0", tk.END).strip()
         if not msg:
             return
 
-        self.append_chat("Vous", msg)
         self.user_input.delete("1.0", tk.END)
+
+        # Gestion des commandes spéciales (Fichiers)
+        if msg.startswith('/'):
+            parts = msg.split(' ')
+            cmd = parts[0].lower()
+            
+            if cmd == '/openfile' and len(parts) > 1:
+                success, response = self.files.load_file(parts[1])
+                self.append_chat("Système", response)
+                return
+            elif cmd == '/listfiles':
+                self.append_chat("Système", self.files.list_files())
+                return
+            elif cmd == '/closefile' and len(parts) > 1:
+                success, response = self.files.close_file(parts[1])
+                self.append_chat("Système", response)
+                return
+            elif cmd == '/reloadfile' and len(parts) > 1:
+                success, response = self.files.load_file(parts[1])
+                self.append_chat("Système", f"{response} (Rechargé)")
+                return
+            elif cmd == '/clear':
+                self.memory.clear()
+                self.append_chat("Système", "Historique effacé.")
+                return
+            elif cmd == '/help':
+                self.show_help()
+                return
+
+        self.append_chat("Vous", msg)
 
         # Lancer le traitement dans un thread pour ne pas geler l'interface
         threading.Thread(target=self.process_ai_response, args=(msg,), daemon=True).start()
@@ -110,6 +159,7 @@ class AnnaGUI:
     def process_ai_response(self, user_input):
         # 1. Récupération du contexte
         user_summary = self.memory.get_user_info_summary()
+        files_context = self.files.get_context_for_ai()
         assistant_name = self.memory.assistant_profile.get("nom", "Anna")
         
         # 2. Mise à jour mémoire (Message utilisateur)
@@ -117,7 +167,7 @@ class AnnaGUI:
         context = self.memory.get_context()
 
         # 3. Appel IA
-        response = self.engine.get_response(context, user_summary=user_summary, assistant_name=assistant_name)
+        response = self.engine.get_response(context, user_summary=user_summary, assistant_name=assistant_name, files_context=files_context)
         
         if not response:
             user_name = self.memory.user_profile.get("prénom", "Louis")

@@ -6,12 +6,16 @@ class AIEngine:
         self.model = MODEL_NAME
         self.system_prompt = SYSTEM_PROMPT
 
-    def get_response(self, context_messages, user_summary="", assistant_name=DEFAULT_NAME):
+    def get_response(self, context_messages, user_summary="", assistant_name=DEFAULT_NAME, files_context=""):
         try:
             # 1. Construction du prompt système
             system_content = self.system_prompt.strip().format(name=assistant_name)
+            
             if user_summary:
                 system_content += f"\nContexte utilisateur :\n{user_summary}"
+            
+            if files_context:
+                system_content += f"\n{files_context}"
 
             # 2. Nettoyage des messages (Strict: role et content uniquement)
             clean_context = [{"role": m["role"], "content": m["content"]} for m in context_messages]
