@@ -5,6 +5,7 @@ import os
 from PIL import Image, ImageTk
 from file_manager import FileManager
 from intent_router import IntentRouter
+import emotion_manager
 
 class AnnaGUI:
     def __init__(self, engine, memory):
@@ -64,19 +65,26 @@ class AnnaGUI:
         # Message de bienvenue
         self.append_chat("Système", "Bienvenue ! Anna est prête. Clique sur le bouton '?' ou tape /help pour l'aide.")
 
-    def load_avatar(self):
-        """Cherche une image dans le dossier avatar et l'affiche."""
-        avatar_dir = "avatar"
-        if not os.path.exists(avatar_dir):
-            return
+    def load_avatar(self, emotion="neutral"):
+        """Cherche une image dans le dossier avatars selon l'émotion et l'affiche."""
+        avatar_dir = "avatars"
+        img_path = os.path.join(avatar_dir, f"{emotion}.png")
 
-        # On cherche le premier fichier image
-        valid_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp')
-        images = [f for f in os.listdir(avatar_dir) if f.lower().endswith(valid_extensions)]
+        # Si l'image d'émotion n'existe pas, on tente neutral.png
+        if not os.path.exists(img_path):
+            img_path = os.path.join(avatar_dir, "neutral.png")
+        
+        # Si toujours rien, on regarde l'ancien dossier 'avatar' par compatibilité
+        if not os.path.exists(img_path):
+            old_avatar_dir = "avatar"
+            if os.path.exists(old_avatar_dir):
+                valid_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.bmp')
+                images = [f for f in os.listdir(old_avatar_dir) if f.lower().endswith(valid_extensions)]
+                if images:
+                    img_path = os.path.join(old_avatar_dir, images[0])
 
-        if images:
+        if os.path.exists(img_path):
             try:
-                img_path = os.path.join(avatar_dir, images[0])
                 # Ouvrir et redimensionner
                 img = Image.open(img_path)
                 img = img.resize((256, 256), Image.Resampling.LANCZOS)
@@ -86,6 +94,10 @@ class AnnaGUI:
                 self.avatar_label.config(image=self.tk_avatar, text="")
             except Exception as e:
                 print(f"Erreur chargement avatar: {e}")
+
+    def update_avatar(self, emotion):
+        """Met à jour l'avatar de manière sécurisée (thread-safe si appelé via after)."""
+        self.load_avatar(emotion)
 
     def append_chat(self, sender, message):
         self.chat_area.config(state='normal')
@@ -224,7 +236,14 @@ Note : Shift + Entrée pour un saut de ligne."""
         if "Ollama n'a pas renvoyé de texte" not in response:
             self.memory.add_message("assistant", response)
 
-        # 6. Extraction (Optionnel dans la GUI pour l'instant)
+        # 6. Émotions (Nouveau)
+        try:
+            emotion = emotion_manager.detect_emotion(response)
+            self.root.after(0, lambda: self.update_avatar(emotion))
+        except Exception as e:
+            print(f"Erreur détection émotion: {e}")
+
+        # 7. Extraction (Optionnel dans la GUI pour l'instant)
         info = self.engine.extract_fact(user_input)
         if info and "categorie" in info:
             cat, cle, val = info["categorie"].lower(), info["cle"], info["valeur"]
