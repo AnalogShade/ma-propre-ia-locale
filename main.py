@@ -1,4 +1,5 @@
 import sys
+import json
 from ai_engine import AIEngine
 from memory_manager import MemoryManager
 from config import MODEL_NAME
@@ -7,30 +8,36 @@ from file_manager import FileManager
 from intent_router import IntentRouter
 
 def handle_file_intent(text, files, router):
-    """Utilise Llama 3 pour détecter l'intention sur les fichiers."""
+    """Utilise l'IA pour détecter l'intention sur les fichiers ou le projet."""
     intent = router.get_file_intent(text)
     action = intent.get("action")
     path = intent.get("path")
 
     if action == "none":
-        return False
+        return None
 
     # Exécution de l'action
     if action == "open_file" and path:
         success, msg = files.load_file(path)
         print(f"  [SYSTÈME: {msg}]")
-        return True
+        return msg
+    elif action == "set_working_dir" and path:
+        success, msg = files.set_working_dir(path)
+        print(f"  [SYSTÈME: {msg}]")
+        return msg
     elif action == "close_file":
-        if files.current_file_path:
-            success, msg = files.close_file(files.current_file_path)
+        target = path if path else files.current_file_path
+        if target:
+            success, msg = files.close_file(target)
             print(f"  [SYSTÈME: {msg}]")
-            return True
+            return msg
     elif action == "reload_file":
-        if files.current_file_path:
-            success, msg = files.load_file(files.current_file_path)
+        target = path if path else files.current_file_path
+        if target:
+            success, msg = files.load_file(target)
             print(f"  [SYSTÈME: {msg} (Rechargé)]")
-            return True
-    return False
+            return msg
+    return None
 
 def run_console(engine, memory):
     """Lance la version console de l'application."""
@@ -38,10 +45,10 @@ def run_console(engine, memory):
     router = IntentRouter()
     assistant_name = memory.assistant_profile.get("nom", "Antis")
     print("==============================================")
-    print(f"   {assistant_name.upper()} - MODE CONSOLE (v1)   ")
+    print(f"   {assistant_name.upper()} - MODE CONSOLE (v2)   ")
     print("==============================================")
     print(f"Modèle : {engine.model}")
-    print("Commandes : /quit, /clear, /model <nom>, /openfile <path>, /listfiles")
+    print("Commandes : /quit, /clear, /model <nom>, /openfile <path>, /setdir <path>, /listfiles")
     print("----------------------------------------------")
 
     while True:
@@ -51,40 +58,46 @@ def run_console(engine, memory):
 
         if not user_input: continue
 
+        # Gestion des commandes manuelles (/)
         if user_input.startswith('/'):
-            parts = user_input.split(' ')
+            parts = user_input.split(' ', 1)
             cmd = parts[0].lower()
+            arg = parts[1] if len(parts) > 1 else None
+
             if cmd == '/quit': break
             elif cmd == '/clear':
                 confirm = input("Effacer l'historique ? (o/n) : ")
                 if confirm.lower() == 'o': memory.clear()
                 continue
             elif cmd == '/model':
-                if len(parts) > 1:
-                    engine.model = parts[1]
+                if arg:
+                    engine.model = arg
                     print(f"Modèle : {engine.model}")
                 continue
             elif cmd == '/openfile':
-                if len(parts) > 1:
-                    success, msg = files.load_file(parts[1])
+                if arg:
+                    success, msg = files.load_file(arg)
+                    print(f"  [SYSTÈME: {msg}]")
+                continue
+            elif cmd == '/setdir':
+                if arg:
+                    success, msg = files.set_working_dir(arg)
                     print(f"  [SYSTÈME: {msg}]")
                 continue
             elif cmd == '/listfiles':
+                if files.working_dir:
+                    print(f"  [SYSTÈME: Répertoire de travail : {files.working_dir}]")
                 print(f"  [SYSTÈME: {files.list_files()}]")
                 continue
-            elif cmd == '/closefile':
-                if len(parts) > 1:
-                    success, msg = files.close_file(parts[1])
-                    print(f"  [SYSTÈME: {msg}]")
-                continue
-            elif cmd == '/reloadfile':
-                if len(parts) > 1:
-                    success, msg = files.load_file(parts[1])
-                    print(f"  [SYSTÈME: {msg} (Rechargé)]")
-                continue
+            # Les commandes manuelles n'appellent pas l'IA par défaut
+            continue
 
-        # Détection langage naturel pour les fichiers
-        handle_file_intent(user_input, files, router)
+        # Détection langage naturel pour les fichiers et le répertoire
+        file_system_msg = handle_file_intent(user_input, files, router)
+        
+        # Si une action de fichier a été tentée, on l'ajoute au contexte de l'IA
+        if file_system_msg:
+            files_context += f"\n[NOTIFICATION SYSTÈME : {file_system_msg}]\n"
 
         # Logique de réponse
         assistant_name = memory.assistant_profile.get("nom", "Antis")
@@ -104,7 +117,7 @@ def run_console(engine, memory):
         if response and "Ollama n'a pas renvoyé de texte" not in response:
             memory.add_message("assistant", response)
 
-        # Extraction
+        # Extraction de faits
         info = engine.extract_fact(user_input)
         if info and "categorie" in info:
             cat, cle, val = info["categorie"].lower(), info["cle"], info["valeur"]
@@ -118,7 +131,6 @@ def main():
     memory = MemoryManager()
     
     # Choix de l'interface
-    # Par défaut: GUI. Si argument --console: Console.
     if "--console" in sys.argv:
         run_console(engine, memory)
     else:
