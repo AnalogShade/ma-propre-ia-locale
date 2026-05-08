@@ -5,31 +5,41 @@ import shutil
 
 class FileManager:
     def __init__(self, max_mb=2.0):
-        self.loaded_files = {} # {path: {"content": str, "content_with_lines": str, "last_mod": float, "is_truncated": bool}}
+        self.loaded_files = {} # {path: {"content": str, "content_with_lines": str, ...}}
         self.max_mb = max_mb 
-        self.current_file_path = None # Chemin absolu du fichier actif (sous forme de chaîne)
-        self.working_dir = None # Path object pour le répertoire de travail
+        self.working_dir = None # Path object
+        
+        # État système strict
+        self.current_file_path = None
+        self.current_file_content = None
+        self.current_file_numbered_content = None
+        self.last_file_load_success = False
+        self.last_file_error = None
 
     def set_working_dir(self, path):
         """Définit le répertoire de travail courant."""
-        abs_path = Path(path).resolve()
-        if not abs_path.exists() or not abs_path.is_dir():
-            return False, f"Le répertoire '{path}' n'existe pas ou n'est pas un dossier."
-        
-        self.working_dir = abs_path
-        return True, f"Répertoire de travail défini sur : {abs_path}"
+        try:
+            abs_path = Path(path).resolve()
+            if not abs_path.exists() or not abs_path.is_dir():
+                msg = f"Le répertoire '{path}' n'existe pas ou n'est pas un dossier."
+                print(f"  [DEBUG FILE_MANAGER] Échec set_working_dir : {msg}")
+                return False, msg
+            
+            self.working_dir = abs_path
+            print(f"  [DEBUG FILE_MANAGER] working_dir défini : {abs_path}")
+            return True, f"Répertoire de travail défini sur : {abs_path}"
+        except Exception as e:
+            return False, f"Erreur lors de la définition du répertoire : {str(e)}"
 
     def _resolve_path(self, file_path):
         """Résout un chemin de fichier de manière sécurisée."""
         path = Path(file_path)
         
-        # Si le chemin est relatif et qu'on a un working_dir, on le résout par rapport à lui
         if not path.is_absolute() and self.working_dir:
             resolved_path = (self.working_dir / path).resolve()
         else:
             resolved_path = path.resolve()
 
-        # Sécurité : vérifier que le chemin est dans le working_dir (si défini)
         if self.working_dir:
             if not resolved_path.is_relative_to(self.working_dir):
                 raise ValueError(f"Accès refusé : le fichier '{file_path}' est hors du répertoire de travail.")
@@ -44,97 +54,106 @@ class FileManager:
 
     def load_file(self, path_str):
         """Charge un fichier texte et le définit comme fichier actif."""
+        print(f"  [DEBUG FILE_MANAGER] tentative ouverture : {path_str}")
         try:
             abs_path = self._resolve_path(path_str)
+            print(f"  [DEBUG FILE_MANAGER] chemin résolu : {abs_path}")
             
             if not abs_path.exists():
-                return False, f"Le fichier '{path_str}' n'existe pas."
+                self._reset_current_file(f"Le fichier '{path_str}' n'existe pas.")
+                return False, self.last_file_error
 
-            # Vérification de la taille (en Mo)
             file_size_mb = abs_path.stat().st_size / (1024 * 1024)
             if file_size_mb > self.max_mb:
-                return False, f"Le fichier est trop volumineux ({file_size_mb:.2f} Mo). Limite : {self.max_mb} Mo."
-
-            last_mod = abs_path.stat().st_mtime
+                self._reset_current_file(f"Fichier trop volumineux ({file_size_mb:.2f} Mo).")
+                return False, self.last_file_error
 
             with open(abs_path, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            # Pour la v1, on limite à un seul fichier actif
+            # Mise à jour de l'état
             self.loaded_files.clear()
+            self.current_file_path = str(abs_path)
+            self.current_file_content = content
+            self.current_file_numbered_content = self.add_line_numbers(content)
+            self.last_file_load_success = True
+            self.last_file_error = None
             
-            self.loaded_files[str(abs_path)] = {
-                "content": content,
-                "content_with_lines": self.add_line_numbers(content),
-                "last_mod": last_mod,
+            self.loaded_files[self.current_file_path] = {
+                "content": self.current_file_content,
+                "content_with_lines": self.current_file_numbered_content,
                 "name": abs_path.name
             }
-            self.current_file_path = str(abs_path)
 
-            return True, f"Fichier '{abs_path.name}' chargé ({len(content)} caractères)."
+            print(f"  [DEBUG FILE_MANAGER] succès : True")
+            print(f"  [DEBUG FILE_MANAGER] current_file_path : {self.current_file_path}")
+            return True, f"Fichier '{abs_path.name}' chargé."
 
         except ValueError as ve:
+            self._reset_current_file(str(ve))
             return False, str(ve)
         except Exception as e:
-            return False, f"Erreur de lecture : {str(e)}"
+            self._reset_current_file(f"Erreur de lecture : {str(e)}")
+            return False, self.last_file_error
+
+    def _reset_current_file(self, error_msg):
+        """Réinitialise l'état du fichier actif en cas d'erreur ou fermeture."""
+        self.loaded_files.clear()
+        self.current_file_path = None
+        self.current_file_content = None
+        self.current_file_numbered_content = None
+        self.last_file_load_success = False
+        self.last_file_error = error_msg
+        print(f"  [DEBUG FILE_MANAGER] succès : False")
+        print(f"  [DEBUG FILE_MANAGER] erreur : {error_msg}")
 
     def close_file(self, path_str):
         """Retire un fichier de la mémoire active."""
-        try:
-            abs_path = self._resolve_path(path_str)
-            path_key = str(abs_path)
-            
-            if path_key in self.loaded_files:
-                del self.loaded_files[path_key]
-                if self.current_file_path == path_key:
-                    self.current_file_path = None
-                return True, f"Fichier '{abs_path.name}' fermé."
-            return False, "Fichier non trouvé dans les fichiers ouverts."
-        except Exception:
-            return False, "Erreur lors de la fermeture du fichier."
+        self._reset_current_file(None)
+        return True, "Fichier fermé."
+
+    def get_status_summary(self):
+        """Retourne un bloc d'état structuré pour le prompt de l'IA."""
+        status = "\n[ÉTAT SYSTÈME]\n"
+        status += f"working_dir: {self.working_dir if self.working_dir else 'Aucun'}\n"
+        status += f"current_file_path: {self.current_file_path if self.current_file_path else 'Aucun'}\n"
+        status += f"file_loaded: {self.last_file_load_success}\n"
+        status += f"last_file_error: {self.last_file_error if self.last_file_error else 'Aucun'}\n"
+        status += "[/ÉTAT SYSTÈME]\n"
+        return status
 
     def list_files(self):
-        """Retourne la liste des fichiers chargés."""
         if not self.loaded_files:
             return "Aucun fichier chargé."
-        
-        lines = ["Fichiers ouverts :"]
-        for p, data in self.loaded_files.items():
-            lines.append(f"- {data['name']} : {p}")
-        return "\n".join(lines)
+        return f"Fichier ouvert : {self.current_file_path}"
 
     def get_context_for_ai(self):
         """Prépare le bloc de texte à injecter dans le prompt système."""
-        if not self.loaded_files:
-            return ""
-
-        context = "\n--- DOCUMENT ACTIF (AVEC NUMÉROS DE LIGNES) ---\n"
-        for path, data in self.loaded_files.items():
-            context += f"FICHIER : {data['name']}\n"
-            context += f"CHEMIN : {path}\n"
-            context += f"CONTENU :\n{data['content_with_lines']}\n"
-            context += "-----------------------------------------------\n"
-        context += "Utilise les numéros de lignes pour proposer des modifications précises.\n"
+        # On inclut toujours l'état système
+        context = self.get_status_summary()
+        
+        if self.last_file_load_success and self.current_file_numbered_content:
+            context += "\n--- CONTENU DU DOCUMENT ACTIF ---\n"
+            context += f"FICHIER : {Path(self.current_file_path).name}\n"
+            context += f"CONTENU :\n{self.current_file_numbered_content}\n"
+            context += "---------------------------------\n"
+        
         return context
 
     def apply_modification(self, mod):
-        """
-        Applique une modification structurée à un fichier.
-        mod: dict contenant 'action', 'file', et les paramètres spécifiques.
-        """
+        """Applique une modification structurée à un fichier."""
         try:
             file_path = mod.get("file")
             action = mod.get("action")
             reason = mod.get("reason", "Aucune raison fournie")
 
             if not file_path or not action:
-                return False, "Format de modification invalide (champs manquants)."
+                return False, "Format de modification invalide."
 
             abs_path = self._resolve_path(file_path)
             if not abs_path.exists():
                 return False, f"Le fichier '{file_path}' n'existe pas."
 
-            # Lecture du contenu actuel
             with open(abs_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
             
@@ -143,100 +162,53 @@ class FileManager:
             summary = ""
 
             if action == "replace_lines":
-                start = mod.get("start_line")
-                end = mod.get("end_line")
-                new_content = mod.get("new_content")
-
+                start, end, new_content = mod.get("start_line"), mod.get("end_line"), mod.get("new_content")
                 if start is None or end is None or new_content is None:
-                    return False, "Paramètres manquants pour replace_lines."
-                
-                # Validation des lignes (1-indexed)
+                    return False, "Paramètres manquants."
                 if start < 1 or end > len(lines) or start > end:
-                    return False, f"Numéros de lignes invalides : {start}-{end} (Total : {len(lines)} lines)."
-
-                # Remplacement (start-1 pour 0-indexed, end est inclusif)
+                    return False, f"Lignes invalides (Total: {len(lines)})."
                 new_content_lines = new_content.splitlines(keepends=True)
-                # S'assurer que le nouveau contenu se termine par un saut de ligne si nécessaire
-                if new_content and not new_content.endswith('\n'):
-                    new_content_lines[-1] += '\n'
-                
+                if new_content and not new_content.endswith('\n'): new_content_lines[-1] += '\n'
                 new_lines[start-1:end] = new_content_lines
                 summary = f"Remplacement des lignes {start} à {end}."
 
             elif action == "replace_text":
-                target_text = mod.get("target_text")
-                new_text = mod.get("new_text")
-
-                if target_text is None or new_text is None:
-                    return False, "Paramètres manquants pour replace_text."
-
-                count = original_content.count(target_text)
-                if count == 0:
-                    return False, "Texte à remplacer introuvable."
-                if count > 1:
-                    return False, f"Texte trouvé {count} fois. Le remplacement doit être unique."
-
-                new_content = original_content.replace(target_text, new_text)
+                target, new = mod.get("target_text"), mod.get("new_text")
+                if target is None or new is None: return False, "Paramètres manquants."
+                count = original_content.count(target)
+                if count != 1: return False, f"Texte trouvé {count} fois (doit être unique)."
+                new_content = original_content.replace(target, new)
                 new_lines = new_content.splitlines(keepends=True)
-                summary = "Remplacement d'un bloc de texte unique."
+                summary = "Remplacement de texte unique."
 
             elif action == "insert_after_line":
-                line_num = mod.get("line")
-                new_content = mod.get("new_content")
-
-                if line_num is None or new_content is None:
-                    return False, "Paramètres manquants pour insert_after_line."
-
-                if line_num < 0 or line_num > len(lines):
-                    return False, f"Numéro de ligne invalide : {line_num}."
-
+                line_num, new_content = mod.get("line"), mod.get("new_content")
+                if line_num is None or new_content is None: return False, "Paramètres manquants."
                 new_content_lines = new_content.splitlines(keepends=True)
-                if new_content and not new_content.endswith('\n'):
-                    new_content_lines[-1] += '\n'
-
+                if new_content and not new_content.endswith('\n'): new_content_lines[-1] += '\n'
                 new_lines[line_num:line_num] = new_content_lines
-                summary = f"Insertion après la ligne {line_num}."
+                summary = f"Insertion après ligne {line_num}."
 
             elif action == "insert_before_line":
-                line_num = mod.get("line")
-                new_content = mod.get("new_content")
-
-                if line_num is None or new_content is None:
-                    return False, "Paramètres manquants pour insert_before_line."
-
-                if line_num < 1 or line_num > len(lines):
-                    return False, f"Numéro de ligne invalide : {line_num}."
-
+                line_num, new_content = mod.get("line"), mod.get("new_content")
+                if line_num is None or new_content is None: return False, "Paramètres manquants."
                 new_content_lines = new_content.splitlines(keepends=True)
-                if new_content and not new_content.endswith('\n'):
-                    new_content_lines[-1] += '\n'
-
+                if new_content and not new_content.endswith('\n'): new_content_lines[-1] += '\n'
                 new_lines[line_num-1:line_num-1] = new_content_lines
-                summary = f"Insertion avant la ligne {line_num}."
-
+                summary = f"Insertion avant ligne {line_num}."
             else:
                 return False, f"Action inconnue : {action}"
 
-            # Création du backup
+            # Backup
             backup_path = abs_path.with_suffix(abs_path.suffix + ".bak")
             shutil.copy2(abs_path, backup_path)
 
-            # Écriture du nouveau contenu
+            # Écriture
             with open(abs_path, 'w', encoding='utf-8') as f:
                 f.writelines(new_lines)
 
-            # Recharger le fichier dans la mémoire pour que l'IA ait la version à jour
             self.load_file(str(abs_path))
-
-            result = {
-                "success": True,
-                "file": str(abs_path),
-                "action": action,
-                "summary": summary,
-                "backup": str(backup_path),
-                "reason": reason
-            }
-            return True, result
+            return True, {"success": True, "file": str(abs_path), "action": action, "summary": summary, "backup": str(backup_path), "reason": reason}
 
         except Exception as e:
             return False, f"Erreur lors de l'application : {str(e)}"

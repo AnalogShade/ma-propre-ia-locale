@@ -1,5 +1,6 @@
 import sys
 import json
+import re
 from ai_engine import AIEngine
 from memory_manager import MemoryManager
 from config import MODEL_NAME
@@ -7,136 +8,107 @@ from gui import AnnaGUI
 from file_manager import FileManager
 from intent_router import IntentRouter
 
+def detect_working_dir_regex(text):
+    """
+    Détecte directement si l'utilisateur donne un répertoire de travail via regex.
+    Retourne le chemin extrait ou None.
+    """
+    patterns = [
+        r"(?:répertoire de travail|dossier de travail|dossier du projet|répertoire du projet|working directory|working_dir)[\s:]+([a-zA-Z]:\\[^\"<>|]+|/[^\"<>|]+|\.[\\/][^\"<>|]+)",
+        r"(?:répertoire de travail|dossier de travail|dossier du projet|répertoire du projet|working directory|working_dir)[\s:]+(.*)"
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            path = match.group(1).strip()
+            # Nettoyage si le chemin se termine par une ponctuation
+            path = path.rstrip('.?!')
+            return path
+    return None
+
 def handle_file_intent(text, files, router):
-    """Utilise l'IA pour détecter l'intention sur les fichiers ou le projet."""
+    """Analyse l'intention via l'IA pour les autres actions (ouverture, etc.)."""
     intent = router.get_file_intent(text)
     action = intent.get("action")
     path = intent.get("path")
 
-    if action == "none":
-        return None
+    if action == "none": return False, True, None
 
-    # Exécution de l'action
     if action == "open_file" and path:
         success, msg = files.load_file(path)
-        print(f"  [SYSTÈME: {msg}]")
-        return msg
+        return True, success, msg
+    
     elif action == "set_working_dir" and path:
         success, msg = files.set_working_dir(path)
-        print(f"  [SYSTÈME: {msg}]")
-        return msg
-    elif action == "close_file":
-        target = path if path else files.current_file_path
-        if target:
-            success, msg = files.close_file(target)
-            print(f"  [SYSTÈME: {msg}]")
-            return msg
-    elif action == "reload_file":
-        target = path if path else files.current_file_path
-        if target:
-            success, msg = files.load_file(target)
-            print(f"  [SYSTÈME: {msg} (Rechargé)]")
-            return msg
-    return None
+        return True, success, msg
+    
+    return False, True, None
 
 def run_console(engine, memory):
-    """Lance la version console de l'application."""
     files = FileManager()
     router = IntentRouter()
     assistant_name = memory.assistant_profile.get("nom", "Antis")
     print("==============================================")
-    print(f"   {assistant_name.upper()} - MODE CONSOLE (v2)   ")
+    print(f"   {assistant_name.upper()} - MODE CONSOLE (v2.3) ")
     print("==============================================")
-    print(f"Modèle : {engine.model}")
-    print("Commandes : /quit, /clear, /model <nom>, /openfile <path>, /setdir <path>, /listfiles")
-    print("----------------------------------------------")
 
     while True:
         user_summary = memory.get_user_info_summary()
-        files_context = files.get_context_for_ai()
         user_input = input("\nVous : ").strip()
-
         if not user_input: continue
 
-        # Gestion des commandes manuelles (/)
-        if user_input.startswith('/'):
-            parts = user_input.split(' ', 1)
-            cmd = parts[0].lower()
-            arg = parts[1] if len(parts) > 1 else None
-
-            if cmd == '/quit': break
-            elif cmd == '/clear':
-                confirm = input("Effacer l'historique ? (o/n) : ")
-                if confirm.lower() == 'o': memory.clear()
-                continue
-            elif cmd == '/model':
-                if arg:
-                    engine.model = arg
-                    print(f"Modèle : {engine.model}")
-                continue
-            elif cmd == '/openfile':
-                if arg:
-                    success, msg = files.load_file(arg)
-                    print(f"  [SYSTÈME: {msg}]")
-                continue
-            elif cmd == '/setdir':
-                if arg:
-                    success, msg = files.set_working_dir(arg)
-                    print(f"  [SYSTÈME: {msg}]")
-                continue
-            elif cmd == '/listfiles':
-                if files.working_dir:
-                    print(f"  [SYSTÈME: Répertoire de travail : {files.working_dir}]")
-                print(f"  [SYSTÈME: {files.list_files()}]")
-                continue
-            # Les commandes manuelles n'appellent pas l'IA par défaut
+        # 1. DÉTECTION DIRECTE (REGEX) pour le répertoire de travail
+        dir_path = detect_working_dir_regex(user_input)
+        if dir_path:
+            print(f"  [DEBUG MAIN] Détection directe set_working_dir")
+            print(f"  [DEBUG MAIN] Chemin extrait : {dir_path}")
+            success, msg = files.set_working_dir(dir_path)
+            
+            if success:
+                print(f"\n[SYSTÈME] Répertoire de travail défini :\n{dir_path}")
+            else:
+                print(f"\n[SYSTÈME] Échec : {msg}")
+            
+            memory.add_message("user", user_input)
+            memory.add_message("assistant", f"[ACTION SYSTÈME] {msg}")
             continue
 
-        # Détection langage naturel pour les fichiers et le répertoire
-        file_system_msg = handle_file_intent(user_input, files, router)
+        # 2. Détection via IA pour les autres intentions
+        handled, success, msg = handle_file_intent(user_input, files, router)
         
-        # Si une action de fichier a été tentée, on l'ajoute au contexte de l'IA
-        if file_system_msg:
-            files_context += f"\n[NOTIFICATION SYSTÈME : {file_system_msg}]\n"
-
-        # Logique de réponse
-        assistant_name = memory.assistant_profile.get("nom", "Antis")
-        print(f"\n{assistant_name} ({engine.model}) : ", end="", flush=True)
-        
-        memory.add_message("user", user_input)
-        context = memory.get_context()
-        
-        response = engine.get_response(context, user_summary=user_summary, assistant_name=assistant_name, files_context=files_context)
-        
-        if not response:
-            user_name = memory.user_profile.get("prénom", memory.user_profile.get("nom", "Louis"))
-            response = f"Salut {user_name}, je suis là. (Ollama n'a pas renvoyé de texte)"
+        if handled:
+            if success:
+                print(f"\n[SYSTÈME] Action réussie : {msg}")
+            else:
+                print(f"\n[SYSTÈME] Échec : {msg}")
+                if files.working_dir:
+                    print(f"Répertoire actuel : {files.working_dir}")
             
-        print(response)
+            memory.add_message("user", user_input)
+            memory.add_message("assistant", f"[ACTION SYSTÈME] {msg}")
+            continue
 
-        if response and "Ollama n'a pas renvoyé de texte" not in response:
-            memory.add_message("assistant", response)
+        # 3. Vérification si question sur code sans fichier
+        keywords = ["fichier", "code", "contenu", "analyse", "lis"]
+        if not files.last_file_load_success and any(k in user_input.lower() for k in keywords):
+            print(f"\n{assistant_name} : Aucun fichier n'est chargé. Je ne peux pas répondre à cette question.")
+            continue
 
-        # Extraction de faits
-        info = engine.extract_fact(user_input)
-        if info and "categorie" in info:
-            cat, cle, val = info["categorie"].lower(), info["cle"], info["valeur"]
-            if cat == "user_profile": memory.update_user_profile(cle, val)
-            elif cat == "assistant_profile": memory.update_assistant_profile(cle, val)
-            else: memory.add_fact(cle, val)
+        # 4. Appel IA normal
+        print(f"\n{assistant_name} ({engine.model}) : ", end="", flush=True)
+        files_context = files.get_context_for_ai()
+        memory.add_message("user", user_input)
+        
+        response = engine.get_response(memory.get_context(), user_summary=user_summary, assistant_name=assistant_name, files_context=files_context)
+        print(response if response else "...")
+        memory.add_message("assistant", response if response else "...")
 
 def main():
-    # Initialisation des composants
-    engine = AIEngine()
-    memory = MemoryManager()
-    
-    # Choix de l'interface
     if "--console" in sys.argv:
-        run_console(engine, memory)
+        run_console(AIEngine(), MemoryManager())
     else:
-        print("Lancement de l'interface graphique...")
-        app = AnnaGUI(engine, memory)
-        app.run()
+        AnnaGUI(AIEngine(), MemoryManager()).run()
 
 if __name__ == "__main__":
     main()
