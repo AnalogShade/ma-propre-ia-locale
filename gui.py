@@ -139,30 +139,13 @@ Note : Shift + Entrée pour un saut de ligne."""
         messagebox.showinfo("Aide - Commandes", help_text)
 
     def handle_file_intent(self, text):
-        """Utilise Llama 3 pour détecter l'intention sur les fichiers."""
-        intent = self.router.get_file_intent(text)
-        action = intent.get("action")
-        path = intent.get("path")
-
-        if action == "none":
-            return False
-
-        # Exécution de l'action détectée par l'IA
-        if action == "open_file" and path:
-            success, msg = self.files.load_file(path)
-            self.append_chat("Système", msg)
-            return True
-        elif action == "close_file":
-            if self.files.current_file_path:
-                success, msg = self.files.close_file(self.files.current_file_path)
-                self.append_chat("Système", msg)
-                return True
-        elif action == "reload_file":
-            if self.files.current_file_path:
-                success, msg = self.files.load_file(self.files.current_file_path)
-                self.append_chat("Système", f"{msg} (Rechargé)")
-                return True
+        """Utilise l'IA pour détecter et traiter l'intention via le routeur unifié."""
+        result = self.router.process_intent(text, self.files)
         
+        if result.get("handled"):
+            self.append_chat("Système", result.get("message"))
+            return True
+            
         return False
 
     def send_message(self):
@@ -171,6 +154,9 @@ Note : Shift + Entrée pour un saut de ligne."""
             return
 
         self.user_input.delete("1.0", tk.END)
+        
+        # Affichage immédiat du message de l'utilisateur pour un ordre naturel
+        self.append_chat("Vous", msg)
 
         # Gestion des commandes spéciales (Fichiers)
         if msg.startswith('/'):
@@ -202,12 +188,9 @@ Note : Shift + Entrée pour un saut de ligne."""
 
         # Détection langage naturel pour les fichiers
         if self.handle_file_intent(msg):
-            # Si une action fichier a été faite, on peut soit s'arrêter là,
-            # soit continuer pour qu'Anna réagisse. 
-            # Pour l'instant, on laisse Anna répondre à la phrase normalement.
-            pass
-
-        self.append_chat("Vous", msg)
+            # Si une action système est détectée et exécutée, on arrête le flux ici.
+            # L'IA ne répondra pas conversationnellement pour éviter les doublons.
+            return
 
         # Lancer le traitement dans un thread pour ne pas geler l'interface
         threading.Thread(target=self.process_ai_response, args=(msg,), daemon=True).start()
