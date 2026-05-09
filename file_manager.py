@@ -87,15 +87,27 @@ class FileManager:
         print(f"  [DEBUG FILE_MANAGER] état reset : current_file_path=None")
 
     def get_status_summary(self):
+        status_lines = []
+        if self.working_dir:
+            status_lines.append(f"Répertoire actif: {self.working_dir}")
+        if self.current_file_path:
+            status_lines.append(f"Fichier actif: {self.current_file_path}")
+        
+        if self.last_file_error and (self.working_dir or self.current_file_path):
+            status_lines.append(f"Erreur récente: {self.last_file_error}")
+            
+        if not status_lines:
+            return ""
+
         status = "\n[ÉTAT SYSTÈME]\n"
-        status += f"working_dir: {self.working_dir if self.working_dir else 'Aucun'}\n"
-        status += f"current_file_path: {self.current_file_path if self.current_file_path else 'Aucun'}\n"
-        status += f"file_loaded: {self.last_file_load_success}\n"
-        status += f"last_file_error: {self.last_file_error if self.last_file_error else 'Aucun'}\n"
+        status += "\n".join(status_lines) + "\n"
         status += "[/ÉTAT SYSTÈME]\n"
         return status
 
     def get_context_for_ai(self):
+        if not self.working_dir and not self.current_file_path and not self.last_file_load_success:
+            return ""
+
         context = self.get_status_summary()
         if self.last_file_load_success:
             context += f"\n--- CONTENU DE {Path(self.current_file_path).name} ---\n"
