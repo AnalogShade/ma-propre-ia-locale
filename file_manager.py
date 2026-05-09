@@ -44,8 +44,26 @@ class FileManager:
         
         return resolved_path
 
-    def load_file(self, path_str):
+    def load_file(self, path_str, user_input=None):
         print(f"  [DEBUG FILE_MANAGER] tentative ouverture : {path_str}")
+        
+        # R\u00e9solution intelligente si un message utilisateur est fourni
+        if user_input:
+            success, resolution = self.resolve_file_reference(path_str, user_input)
+            if success:
+                path_str = resolution # On utilise le nom r\u00e9solu
+            else:
+                if isinstance(resolution, list):
+                    files_str = ", ".join(resolution)
+                    if not path_str or str(path_str).strip().lower() in ["null", "none", ""]:
+                        msg = f"Voici les fichiers disponibles. Lequel veux-tu ouvrir ? ({files_str})"
+                    else:
+                        msg = f"Je n'ai pas trouv\u00e9 '{path_str}'. Voici les fichiers disponibles : ({files_str})"
+                else:
+                    msg = resolution
+                self._reset_current_file(msg)
+                return False, msg
+
         print(f"  [DEBUG FILE_MANAGER] working_dir actuel : {self.working_dir}")
         try:
             abs_path = self._resolve_path(path_str)
@@ -115,4 +133,58 @@ class FileManager:
         return context
 
     def list_files(self):
-        return f"Ouvert : {self.current_file_path}" if self.current_file_path else "Aucun fichier."
+        if self.current_file_path:
+            return f"Ouvert : {self.current_file_path}"
+        
+        files = self.get_available_files()
+        if files:
+            return f"Fichiers disponibles : {', '.join(files)}"
+        return "Aucun fichier dans le r\u00e9pertoire."
+
+    def get_available_files(self):
+        """Liste les fichiers r\u00e9els du premier niveau dans le working_dir."""
+        if not self.working_dir or not Path(self.working_dir).exists():
+            return []
+        
+        try:
+            # On ne prend que les fichiers (pas de dossiers) et on ignore les fichiers cach\u00e9s
+            files = [f.name for f in Path(self.working_dir).iterdir() if f.is_file() and not f.name.startswith('.')]
+            return sorted(files)
+        except Exception as e:
+            print(f"  [DEBUG FILE_MANAGER] Erreur list_files : {e}")
+            return []
+
+    def resolve_file_reference(self, raw_target, user_input):
+        """
+        Tente de r\u00e9soudre quel fichier l'utilisateur veut ouvrir sans nettoyage hard-cod\u00e9.
+        Se base sur la r\u00e9alit\u00e9 du working_dir.
+        """
+        available_files = self.get_available_files()
+        if not available_files:
+            return False, "Aucun fichier disponible dans le r\u00e9pertoire actuel."
+
+        # 1. Requ\u00eate g\u00e9n\u00e9rique (path_raw == None ou string vide)
+        if not raw_target or str(raw_target).strip().lower() in ["null", "none", ""]:
+            return False, available_files # D\u00e9clenche la liste de choix
+
+        user_input_lower = user_input.lower()
+        clean_target = str(raw_target).strip('"\'')
+        
+        # 2. Match Exact sur raw_target
+        if clean_target in available_files:
+            return True, clean_target
+        
+        # 3. Recherche par inclusion des noms de fichiers r\u00e9els dans le message utilisateur
+        found_files = []
+        for f in sorted(available_files, key=len, reverse=True):
+            if f.lower() in user_input_lower:
+                found_files.append(f)
+        
+        if len(found_files) == 1:
+            return True, found_files[0]
+        
+        if len(found_files) > 1:
+            return False, found_files # Ambigu\u00eft\u00e9
+
+        # 4. Aucun fichier r\u00e9el trouv\u00e9
+        return False, available_files

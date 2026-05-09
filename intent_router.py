@@ -7,12 +7,29 @@ class IntentRouter:
         self.model = MODEL_NAME
 
     def get_file_intent(self, user_input):
-        prompt = f"""Analyse l'intention concernant les fichiers ou le projet.
-Réponds UNIQUEMENT avec un objet JSON valide. 
+        prompt = f"""Analyse UNIQUEMENT si le message utilisateur contient une commande EXPLICITE li\u00e9e aux fichiers ou aux r\u00e9pertoires.
+R\u00e9ponds UNIQUEMENT avec un objet JSON valide. 
+
+R\u00c8GLES CRITIQUES :
+1. L'action "open_file" est r\u00e9serv\u00e9e \u00e0 l'ouverture d'un NOUVEAU document.
+2. Si l'utilisateur demande de MODIFIER le contenu (ex: "ajoute", "remplace", "ecris"), retourne action: "none".
+3. Une conversation normale NE doit PAS d\u00e9clencher d'action.
+4. Si l'utilisateur demande d'ouvrir un fichier de mani\u00e8re g\u00e9n\u00e9rique SANS nommer de fichier (ex: "open the file", "ouvre un fichier"), retourne action: "open_file" et path_raw: null.
+
+EXEMPLES N\u00c9GATIFS (action: "none") :
+- "Ajoute du code dans le fichier"
+- "Modifie la ligne 2"
+- "Comment vas-tu ?"
+- "?"
+
+EXEMPLES POSITIFS :
+- "Ouvre main.py" -> open_file, path_raw: "main.py"
+- "Voici mon dossier C:\\Projet" -> set_working_dir, path_raw: "C:\\Projet"
+- "Reload le fichier" -> reload_file, path_raw: null
+- "Open the file" -> open_file, path_raw: null
 
 Actions possibles : "set_working_dir", "open_file", "close_file", "reload_file", "none".
-Si l'action nécessite un chemin ou nom de fichier, inclus-le dans la clé "path_raw".
-IMPORTANT: Le chemin doit correspondre exactement à ce que l'utilisateur a écrit, sans normalisation volontaire. Échappe les anti-slashs Windows uniquement si c'est requis pour que le JSON soit valide.
+Si l'action n\u00e9cessite un chemin ou nom de fichier, inclus-le dans la cl\u00e9 "path_raw".
 
 Message : "{user_input}"
 JSON :"""
@@ -65,9 +82,28 @@ JSON :"""
         Analyse l'intention via LLM et exécute l'action appropriée via le file_manager.
         Retourne un dictionnaire structuré et standardisé pour l'interface appelante.
         """
+        # Garde-fou 0 : Messages courts et conversationnels évidents (pour éviter l'appel LLM)
+        clean_input = user_input.lower().strip()
+        blacklist = ["?", "??", "ca va?", "\u00e7a va?", "salut", "bonjour", "allo", "ok", "d'accord"]
+        if clean_input in blacklist:
+            return {"handled": False, "action": "none", "message": "", "system_context": ""}
+
         intent = self.get_file_intent(user_input)
         action = intent.get("action", "none")
         path_raw = intent.get("path_raw")
+
+        # Garde-fou backend : rejeter les actions qui n'ont pas de chemin valide
+        if action == "set_working_dir":
+            if not path_raw or path_raw.strip() in ["?", ".", ""] or len(path_raw.strip()) < 2:
+                print(f"  [DEBUG ROUTER] Garde-fou : action {action} rejet\u00e9e car path_raw '{path_raw}' est invalide.")
+                action = "none"
+                path_raw = None
+        elif action == "open_file":
+            # On accepte path_raw == None (qui devient None ici) pour les requ\u00eates g\u00e9n\u00e9riques
+            if path_raw is not None and (path_raw.strip() in ["?", "."] or len(path_raw.strip()) < 2):
+                print(f"  [DEBUG ROUTER] Garde-fou : action {action} rejet\u00e9e car path_raw '{path_raw}' est invalide.")
+                action = "none"
+                path_raw = None
 
         result = {
             "handled": False,
@@ -85,7 +121,8 @@ JSON :"""
         if action == "set_working_dir" and path_raw:
             success, msg = file_manager.set_working_dir(path_raw)
         elif action == "open_file" and path_raw:
-            success, msg = file_manager.load_file(path_raw)
+            # On passe user_input pour permettre la r\u00e9solution intelligente
+            success, msg = file_manager.load_file(path_raw, user_input=user_input)
         elif action == "close_file":
             # Gère la fermeture avec ou sans path spécifique
             target_path = path_raw if path_raw else file_manager.current_file_path
