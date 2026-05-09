@@ -107,12 +107,20 @@ class FileManager:
     def get_status_summary(self):
         status_lines = []
         if self.working_dir:
-            status_lines.append(f"Répertoire actif: {self.working_dir}")
+            status_lines.append(f"R\u00e9pertoire actif: {self.working_dir}")
+            
+            # Injection de la liste des fichiers disponibles pour l'IA
+            files = self.get_available_files()
+            if files:
+                status_lines.append(f"Fichiers disponibles: {', '.join(files)}")
+            else:
+                status_lines.append("Fichiers disponibles: Aucun")
+
         if self.current_file_path:
             status_lines.append(f"Fichier actif: {self.current_file_path}")
         
         if self.last_file_error and (self.working_dir or self.current_file_path):
-            status_lines.append(f"Erreur récente: {self.last_file_error}")
+            status_lines.append(f"Erreur r\u00e9cente: {self.last_file_error}")
             
         if not status_lines:
             return ""
