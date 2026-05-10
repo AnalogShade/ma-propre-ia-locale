@@ -6,11 +6,14 @@ class AIEngine:
         self.model = MODEL_NAME
         self.system_prompt = SYSTEM_PROMPT
 
-    def get_response(self, context_messages, user_summary="", assistant_name=DEFAULT_NAME, files_context=""):
+    def get_response(self, context_messages, user_summary="", assistant_summary="", assistant_name=DEFAULT_NAME, files_context=""):
         try:
-            # 1. Construction du prompt système
+            # 1. Construction du prompt syst\u00e8me
             system_content = self.system_prompt.strip().format(name=assistant_name)
             
+            if assistant_summary:
+                system_content += f"\n{assistant_summary}"
+
             if user_summary:
                 system_content += f"\nContexte utilisateur :\n{user_summary}"
             

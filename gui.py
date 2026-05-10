@@ -196,17 +196,24 @@ Note : Shift + Entrée pour un saut de ligne."""
         threading.Thread(target=self.process_ai_response, args=(msg,), daemon=True).start()
 
     def process_ai_response(self, user_input):
-        # 1. Récupération du contexte
+        # 1. R\u00e9cup\u00e9ration du contexte
         user_summary = self.memory.get_user_info_summary()
+        assistant_summary = self.memory.get_assistant_info_summary()
         files_context = self.files.get_context_for_ai()
         assistant_name = self.memory.assistant_profile.get("nom", "Anna")
         
-        # 2. Mise à jour mémoire (Message utilisateur)
+        # 2. Mise \u00e0 jour m\u00e9moire (Message utilisateur)
         self.memory.add_message("user", user_input)
         context = self.memory.get_context()
-
+ 
         # 3. Appel IA
-        response = self.engine.get_response(context, user_summary=user_summary, assistant_name=assistant_name, files_context=files_context)
+        response = self.engine.get_response(
+            context, 
+            user_summary=user_summary, 
+            assistant_summary=assistant_summary,
+            assistant_name=assistant_name, 
+            files_context=files_context
+        )
         
         if not response:
             user_name = self.memory.user_profile.get("prénom", "Louis")

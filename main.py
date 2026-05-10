@@ -38,9 +38,16 @@ def run_console(engine, memory):
 
         # 4. APPEL IA NORMAL
         print(f"\n{assistant_name} ({engine.model}) : ", end="", flush=True)
-        files_context = files.get_context_for_ai() # Injecte l'état REEL du FileManager
+        files_context = files.get_context_for_ai() # Injecte l'\u00e9tat REEL du FileManager
+        assistant_summary = memory.get_assistant_info_summary()
         
-        response = engine.get_response(memory.get_context(), user_summary=user_summary, assistant_name=assistant_name, files_context=files_context)
+        response = engine.get_response(
+            memory.get_context(), 
+            user_summary=user_summary, 
+            assistant_summary=assistant_summary,
+            assistant_name=assistant_name, 
+            files_context=files_context
+        )
         print(response if response else "...")
         memory.add_message("user", user_input)
         memory.add_message("assistant", response if response else "...")
