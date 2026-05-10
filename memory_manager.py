@@ -99,6 +99,17 @@ class MemoryManager:
         summary += "--- FIN DES CONNAISSANCES ---\n"
         return summary
 
+    def get_assistant_info_summary(self):
+        """Cr\u00e9e un r\u00e9sum\u00e9 naturel de ta propre identit\u00e9."""
+        if not self.assistant_profile:
+            return ""
+        
+        summary = "\n--- TON IDENTIT\u00c9 ET TES TRAITS ---\n"
+        for k, v in self.assistant_profile.items():
+            summary += f"- Ton/Ta {k} : {v}\n"
+        summary += "--- FIN DE TON IDENTIT\u00c9 ---\n"
+        return summary
+
     def clear(self):
         """Efface tout l'historique court terme mais garde les profils et faits."""
         self.history = []
