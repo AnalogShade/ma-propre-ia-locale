@@ -40,27 +40,27 @@ class AIEngine:
         Ignore les salutations et le bavardage inutile.
         """
         prompt = f"""
-        MESSAGE À ANALYSER : "{last_user_message}"
+        MESSAGE \u00c0 ANALYSER : "{last_user_message}"
         
         INSTRUCTIONS :
-        1. Analyse si le message contient une information DURABLE (nom, préférence, fait important, projet).
-        2. IGNORE impérativement :
-           - Les salutations ("Salut", "Bonjour", "Coucou", etc.)
-           - Les questions de politesse ("Ça va ?", "Comment vas-tu ?")
-           - Les mentions simples du nom de l'IA ("Salut Anna")
-        3. Si une information durable est trouvée, CLASSE-LA :
-           - Information sur l'IA (nom, personnalité) -> categorie: "assistant_profile"
-           - Information sur l'humain (nom, goûts, job) -> categorie: "user_profile"
-           - Information générale ou fait marquant -> categorie: "long_term_facts"
+        1. Analyse si le message contient une information DURABLE et IMPORTANTE (nom, pr\u00e9f\u00e9rence, fait, trait de personnalit\u00e9).
+        2. IGNORE imp\u00e9rativement :
+           - Les salutations, politesses, questions sur ton \u00e9tat.
+           - Les commandes syst\u00e8me de fichiers (ex: "ouvre le fichier").
+           - Les phrases purement conversationnelles sans fait nouveau.
+        3. Si une info est trouv\u00e9e, CLASSE-LA STRICTEMENT :
+           - "assistant_profile" : traits d'Anna (ex: "tu as les cheveux bleus").
+           - "user_profile" : traits de l'utilisateur (ex: "je m'appelle Louis").
+           - "long_term_facts" : faits g\u00e9n\u00e9raux (ex: "on travaille sur un projet IA").
         
-        4. FORMAT DE RÉPONSE (JSON UNIQUEMENT) :
+        4. FORMAT DE R\u00c9PONSE (JSON UNIQUEMENT) :
         {{
-            "categorie": "nom_categorie",
+            "categorie": "assistant_profile" | "user_profile" | "long_term_facts",
             "cle": "nom_de_la_cle",
             "valeur": "contenu"
         }}
         
-        5. SI AUCUNE INFORMATION DURABLE : Réponds "None" (sans JSON).
+        5. SI AUCUNE INFORMATION DURABLE OU EN CAS DE DOUTE : R\u00e9ponds "None" sans rien d'autre.
         """
         try:
             response = ollama.generate(model=self.model, prompt=prompt)
