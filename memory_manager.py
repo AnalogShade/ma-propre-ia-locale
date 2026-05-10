@@ -73,6 +73,25 @@ class MemoryManager:
             }
         self._save_file(FACTS_FILE, self.facts)
 
+    def process_extracted_fact(self, fact_dict):
+        """Re\u00e7oit un dictionnaire (categorie, cle, valeur) et l'aiguille vers le bon stockage."""
+        if not fact_dict or not isinstance(fact_dict, dict):
+            return
+        
+        cat = fact_dict.get("categorie")
+        cle = fact_dict.get("cle")
+        val = fact_dict.get("valeur")
+        
+        if not cat or not cle or not val:
+            return
+
+        if cat == "user_profile":
+            self.update_user_profile(cle, val)
+        elif cat == "assistant_profile":
+            self.update_assistant_profile(cle, val)
+        elif cat == "long_term_facts":
+            self.add_fact(cle, val)
+
     def get_context(self):
         """Retourne les derniers messages pour Ollama."""
         return self.history[-CONTEXT_WINDOW:]

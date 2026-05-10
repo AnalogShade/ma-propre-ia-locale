@@ -233,13 +233,13 @@ Note : Shift + Entrée pour un saut de ligne."""
         except Exception as e:
             print(f"Erreur détection émotion: {e}")
 
-        # 7. Extraction (Optionnel dans la GUI pour l'instant)
-        info = self.engine.extract_fact(user_input)
-        if info and "categorie" in info:
-            cat, cle, val = info["categorie"].lower(), info["cle"], info["valeur"]
-            if cat == "user_profile": self.memory.update_user_profile(cle, val)
-            elif cat == "assistant_profile": self.memory.update_assistant_profile(cle, val)
-            else: self.memory.add_fact(cle, val)
+        # 7. Extraction en arri\u00e8re-plan (Parall\u00e8le \u00e0 la r\u00e9ponse)
+        def background_extraction():
+            info = self.engine.extract_fact(user_input)
+            if info:
+                self.memory.process_extracted_fact(info)
+        
+        threading.Thread(target=background_extraction, daemon=True).start()
 
     def run(self):
         self.root.mainloop()

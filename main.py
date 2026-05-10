@@ -1,5 +1,6 @@
 import sys
 import json
+import threading
 from ai_engine import AIEngine
 from memory_manager import MemoryManager
 from config import MODEL_NAME
@@ -11,6 +12,13 @@ def run_console(engine, memory):
     files = FileManager()
     router = IntentRouter()
     assistant_name = memory.assistant_profile.get("nom", "Antis")
+    
+    def background_memory_task(user_msg):
+        """T\u00e2che d'extraction de faits en arri\u00e8re-plan."""
+        fact = engine.extract_fact(user_msg)
+        if fact:
+            memory.process_extracted_fact(fact)
+
     print("==============================================")
     print(f"   {assistant_name.upper()} - MODE CONSOLE (v2.4) ")
     print("==============================================")
@@ -20,7 +28,10 @@ def run_console(engine, memory):
         user_input = input("\nVous : ").strip()
         if not user_input: continue
 
-        # 1. DÉTECTION D'INTENTION SYSTÈME (LLM-First)
+        # Lancement de l'extraction en arri\u00e8re-plan pour ne pas ralentir la r\u00e9ponse
+        threading.Thread(target=background_memory_task, args=(user_input,), daemon=True).start()
+
+        # 1. D\u00c9TECTION D'INTENTION SYST\u00c8ME (LLM-First)
         result = router.process_intent(user_input, files)
         if result.get("handled"):
             print(f"\n[SYSTÈME] {result.get('message')}")
