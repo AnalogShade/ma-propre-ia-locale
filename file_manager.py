@@ -140,6 +140,17 @@ class FileManager:
             context += self.current_file_numbered_content + "\n"
         return context
 
+    def close_file(self, path_str=None):
+        """Ferme le fichier actif ou le fichier sp\u00e9cifi\u00e9."""
+        if not self.current_file_path:
+            return False, "Aucun fichier n'est actuellement ouvert."
+        
+        # On pourrait v\u00e9rifier si path_str correspond, mais pour l'instant
+        # on ferme simplement le fichier actif puisque c'est un agent mono-fichier.
+        old_name = Path(self.current_file_path).name
+        self._reset_current_file(None)
+        return True, f"Fichier '{old_name}' ferm\u00e9."
+
     def list_files(self):
         if self.current_file_path:
             return f"Ouvert : {self.current_file_path}"
