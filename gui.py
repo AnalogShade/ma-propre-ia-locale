@@ -6,6 +6,7 @@ from PIL import Image, ImageTk
 from file_manager import FileManager
 from intent_router import IntentRouter
 import emotion_manager
+from stt_manager import STTManager
 
 class AnnaGUI:
     def __init__(self, engine, memory):
@@ -23,6 +24,12 @@ class AnnaGUI:
         # Layout principal (Gauche: Avatar | Droite: Chat)
         self.main_container = tk.Frame(self.root, bg="#121212")
         self.main_container.pack(expand=True, fill="both", padx=10, pady=10)
+
+        # Initialisation STT
+        self.stt_manager = STTManager(
+            on_model_ready=self._on_stt_ready,
+            on_model_error=self._on_stt_error
+        )
 
         # Zone Gauche : Avatar Placeholder
         self.left_frame = tk.Frame(self.main_container, bg="#1e1e1e", width=256, height=256, highlightbackground="#333333", highlightthickness=1)
@@ -46,12 +53,26 @@ class AnnaGUI:
         self.input_frame = tk.Frame(self.right_frame, bg="#121212")
         self.input_frame.pack(fill="x", padx=5, pady=5)
 
-        # On place d'abord les boutons à droite pour qu'ils soient prioritaires
+        # On place d'abord les boutons \u00e0 droite pour qu'ils soient prioritaires
         self.help_button = tk.Button(self.input_frame, text=" ? ", command=self.show_help, bg="#444444", fg="white", activebackground="#666666", activeforeground="white", relief="flat", padx=10)
         self.help_button.pack(side="right", fill="y", padx=(5, 0))
 
         self.send_button = tk.Button(self.input_frame, text="Envoyer", command=self.send_message, bg="#333333", fg="white", activebackground="#444444", activeforeground="white", relief="flat", padx=15)
         self.send_button.pack(side="right", fill="y", padx=(5, 0))
+
+        self.mic_button = tk.Button(
+            self.input_frame, 
+            text="\u23f3", 
+            command=self.toggle_recording,
+            font=("Segoe UI", 12), 
+            bg="#2d2d2d", 
+            fg="white", 
+            activebackground="#444444", 
+            activeforeground="white",
+            relief="flat",
+            state="disabled"
+        )
+        self.mic_button.pack(side="right", fill="y", padx=(5, 0))
 
         # Puis la zone de texte qui prend tout le reste de la place
         self.user_input = tk.Text(self.input_frame, font=("Arial", 11), bg="#333333", fg="white", 
@@ -64,6 +85,30 @@ class AnnaGUI:
 
         # Message de bienvenue
         self.append_chat("Système", "Bienvenue ! Anna est prête. Clique sur le bouton '?' ou tape /help pour l'aide.")
+
+    def _on_stt_ready(self):
+        self.root.after(0, lambda: self.mic_button.config(text="\ud83c\udf99\ufe0f", state="normal", fg="white"))
+
+    def _on_stt_error(self, err_msg):
+        self.root.after(0, lambda: self.mic_button.config(text="\u274c", state="disabled"))
+
+    def toggle_recording(self):
+        if not self.stt_manager.is_recording:
+            success, msg = self.stt_manager.start_recording()
+            if success:
+                self.mic_button.config(text="\ud83d\udd34", fg="red")
+            else:
+                print(f"[GUI] Erreur STT: {msg}")
+        else:
+            self.mic_button.config(text="\ud83d\udd04", fg="yellow", state="disabled")
+            self.stt_manager.stop_recording_and_transcribe(self._on_transcription_done)
+
+    def _on_transcription_done(self, text):
+        def update_gui():
+            self.mic_button.config(text="\ud83c\udf99\ufe0f", fg="white", state="normal")
+            if text:
+                self.user_input.insert(tk.END, text + " ")
+        self.root.after(0, update_gui)
 
     def load_avatar(self, emotion="neutral"):
         """Cherche une image dans le dossier avatars selon l'émotion et l'affiche."""
