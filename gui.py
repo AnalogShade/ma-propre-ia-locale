@@ -7,6 +7,7 @@ from file_manager import FileManager
 from intent_router import IntentRouter
 import emotion_manager
 from stt_manager import STTManager
+from tts_manager import TTSManager
 
 class AnnaGUI:
     def __init__(self, engine, memory):
@@ -25,11 +26,13 @@ class AnnaGUI:
         self.main_container = tk.Frame(self.root, bg="#121212")
         self.main_container.pack(expand=True, fill="both", padx=10, pady=10)
 
-        # Initialisation STT
+        # Initialisation STT & TTS
         self.stt_manager = STTManager(
             on_model_ready=self._on_stt_ready,
             on_model_error=self._on_stt_error
         )
+        self.tts_manager = TTSManager()
+        self.msg_counter = 0
 
         # Zone Gauche : Avatar Placeholder
         self.left_frame = tk.Frame(self.main_container, bg="#1e1e1e", width=256, height=256, highlightbackground="#333333", highlightthickness=1)
@@ -38,6 +41,10 @@ class AnnaGUI:
         
         self.avatar_label = tk.Label(self.left_frame, text="Avatar Anna\n(256x256)", bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 12))
         self.avatar_label.place(relx=0.5, rely=0.5, anchor="center")
+
+        # Bouton TTS (Speaker)
+        self.tts_button = tk.Button(self.left_frame, text="\ud83d\udd0a Voix", command=self.show_voice_menu, bg="#333333", fg="white", activebackground="#444444", activeforeground="white", relief="flat")
+        self.tts_button.pack(side="bottom", pady=(0, 5), fill="x", padx=10)
 
         # Chargement de l'image d'avatar
         self.load_avatar()
@@ -110,6 +117,37 @@ class AnnaGUI:
                 self.user_input.insert(tk.END, text + " ")
         self.root.after(0, update_gui)
 
+    def show_voice_menu(self):
+        menu = tk.Menu(self.root, tearoff=0, bg="#333333", fg="white", activebackground="#03dac6", activeforeground="black")
+        voices = self.tts_manager.get_voices()
+        
+        if not voices:
+            menu.add_command(label="T\u00e9l\u00e9charger voix FR (upmc-medium)", command=lambda: self.tts_manager.download_default_voice(self._on_tts_download_progress))
+        else:
+            for v in voices:
+                mark = "\u2713 " if v == self.tts_manager.current_voice_name else "  "
+                menu.add_command(label=f"{mark}{v}", command=lambda voice=v: self.tts_manager.load_voice(voice))
+            
+            menu.add_separator()
+            menu.add_command(label="Arr\u00eater la lecture", command=self.tts_manager.stop)
+            
+        x = self.root.winfo_pointerx()
+        y = self.root.winfo_pointery()
+        menu.tk_popup(x, y)
+
+    def _on_tts_download_progress(self, msg):
+        self.root.after(0, lambda: self.tts_button.config(text=msg))
+        if msg == "Voix pr\u00eate.":
+            self.root.after(2000, lambda: self.tts_button.config(text="\ud83d\udd0a Voix"))
+
+    def play_tts(self, message):
+        def on_start():
+            self.root.after(0, lambda: self.tts_button.config(text="\ud83d\udd0a Lecture...", fg="#03dac6"))
+        def on_finish():
+            self.root.after(0, lambda: self.tts_button.config(text="\ud83d\udd0a Voix", fg="white"))
+            
+        self.tts_manager.speak(message, on_start=on_start, on_finish=on_finish)
+
     def load_avatar(self, emotion="neutral"):
         """Cherche une image dans le dossier avatars selon l'émotion et l'affiche."""
         avatar_dir = "avatars"
@@ -146,12 +184,25 @@ class AnnaGUI:
 
     def append_chat(self, sender, message):
         self.chat_area.config(state='normal')
-        self.chat_area.insert(tk.END, f"\n{sender} : ", "bold")
+        
+        assistant_name = self.memory.assistant_profile.get("nom", "Anna")
+        
+        if sender == assistant_name:
+            tag_name = f"tts_tag_{self.msg_counter}"
+            self.msg_counter += 1
+            self.chat_area.insert(tk.END, f"\n{sender} : ", ("bold", "clickable_name", tag_name))
+            
+            # Bind the click event to play TTS for this specific message
+            self.chat_area.tag_bind(tag_name, "<Button-1>", lambda e, msg=message: self.play_tts(msg))
+        else:
+            self.chat_area.insert(tk.END, f"\n{sender} : ", "bold")
+            
         self.chat_area.insert(tk.END, f"{message}\n")
         self.chat_area.config(state='disabled')
         self.chat_area.yview(tk.END)
         # Couleurs des tags pour le mode sombre
         self.chat_area.tag_config("bold", font=("Arial", 11, "bold"), foreground="#bb86fc") # Une touche de violet pour les noms
+        self.chat_area.tag_config("clickable_name", foreground="#03dac6", underline=True)
 
     def handle_return(self, event):
         """Envoie le message sur Entrée simple."""

@@ -3,3 +3,4 @@ Pillow
 sounddevice
 scipy
 faster-whisper
+piper-tts
