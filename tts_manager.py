@@ -22,6 +22,7 @@ class TTSManager:
         self.current_voice_name = None
         self.voice = None
         self.is_playing = False
+        self.current_session = 0
         
         # Charger la première voix disponible par défaut
         if self.available_voices:
@@ -90,23 +91,22 @@ class TTSManager:
             return False
 
     def stop(self):
-        """Arrête la lecture en cours."""
+        """Arrête la lecture en cours en incrémentant la session."""
         self.is_playing = False
+        self.current_session += 1
 
     def speak(self, text, on_start=None, on_finish=None):
-        """Lit un texte à voix haute en streaming."""
+        """Lit un texte à voix haute en streaming avec gestion de session."""
         if not self.voice or not text.strip():
             print("[TTS_MANAGER] Pas de voix chargée ou texte vide.")
             if on_finish: on_finish()
             return
             
-        # Si déjà en cours, on coupe
-        if self.is_playing:
-            self.stop()
-            import time
-            time.sleep(0.2) # Laisser le temps au flux précédent de s'arrêter
-            
+        # Arrêter toute lecture en cours et démarrer une nouvelle session
+        self.stop()
+        
         self.is_playing = True
+        session_id = self.current_session
         
         def _speak_thread():
             try:
@@ -119,8 +119,9 @@ class TTSManager:
                 
                 # Piper génère l'audio par petits morceaux (streaming)
                 for chunk in self.voice.synthesize(text):
-                    if not self.is_playing:
-                        break # Couper prématurément si demandé
+                    # Couper prématurément si demandé ou si une nouvelle session a démarré
+                    if not self.is_playing or session_id != self.current_session:
+                        break 
                     
                     # chunk.audio_int16_array est un numpy.ndarray
                     stream.write(chunk.audio_int16_array)
@@ -130,7 +131,10 @@ class TTSManager:
             except Exception as e:
                 print(f"[TTS_MANAGER] Erreur lecture TTS: {e}")
             finally:
-                self.is_playing = False
-                if on_finish: on_finish()
+                # On ne réinitialise is_playing et on n'appelle on_finish 
+                # que si c'est toujours notre session qui est active
+                if session_id == self.current_session:
+                    self.is_playing = False
+                    if on_finish: on_finish()
 
         threading.Thread(target=_speak_thread, daemon=True).start()

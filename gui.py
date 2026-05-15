@@ -33,6 +33,7 @@ class AnnaGUI:
         )
         self.tts_manager = TTSManager()
         self.msg_counter = 0
+        self.current_tts_tag = None
 
         # Zone Gauche : Avatar Placeholder
         self.left_frame = tk.Frame(self.main_container, bg="#1e1e1e", width=256, height=256, highlightbackground="#333333", highlightthickness=1)
@@ -140,11 +141,20 @@ class AnnaGUI:
         if msg == "Voix pr\u00eate.":
             self.root.after(2000, lambda: self.tts_button.config(text="\ud83d\udd0a Voix"))
 
-    def play_tts(self, message):
+    def play_tts(self, message, tag_id):
+        # Si on clique sur le même message qui est déjà en cours de lecture : on arrête tout
+        if self.tts_manager.is_playing and self.current_tts_tag == tag_id:
+            self.tts_manager.stop()
+            self.current_tts_tag = None
+            return
+
         def on_start():
-            self.root.after(0, lambda: self.tts_button.config(text="\ud83d\udd0a Lecture...", fg="#03dac6"))
+            self.current_tts_tag = tag_id
+            self.root.after(0, lambda: self.tts_button.config(text="🔊 Lecture...", fg="#03dac6"))
+            
         def on_finish():
-            self.root.after(0, lambda: self.tts_button.config(text="\ud83d\udd0a Voix", fg="white"))
+            self.current_tts_tag = None
+            self.root.after(0, lambda: self.tts_button.config(text="🔊 Voix", fg="white"))
             
         self.tts_manager.speak(message, on_start=on_start, on_finish=on_finish)
 
@@ -192,8 +202,8 @@ class AnnaGUI:
             self.msg_counter += 1
             self.chat_area.insert(tk.END, f"\n{sender} : ", ("bold", "clickable_name", tag_name))
             
-            # Bind the click event to play TTS for this specific message
-            self.chat_area.tag_bind(tag_name, "<Button-1>", lambda e, msg=message: self.play_tts(msg))
+            # Bind the click event to play TTS for this specific message (toggle mode)
+            self.chat_area.tag_bind(tag_name, "<Button-1>", lambda e, msg=message, tid=tag_name: self.play_tts(msg, tid))
         else:
             self.chat_area.insert(tk.END, f"\n{sender} : ", "bold")
             
