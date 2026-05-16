@@ -148,8 +148,10 @@ class AnnaGUI:
             self.current_tts_tag = None
             return
 
+        # On définit le tag immédiatement pour éviter les conditions de course lors de clics rapides
+        self.current_tts_tag = tag_id
+
         def on_start():
-            self.current_tts_tag = tag_id
             self.root.after(0, lambda: self.tts_button.config(text="🔊 Lecture...", fg="#03dac6"))
             
         def on_finish():

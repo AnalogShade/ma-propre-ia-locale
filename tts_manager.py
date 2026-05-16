@@ -23,6 +23,8 @@ class TTSManager:
         self.voice = None
         self.is_playing = False
         self.current_session = 0
+        self.stream = None
+        self.lock = threading.RLock()
         
         # Charger la première voix disponible par défaut
         if self.available_voices:
@@ -91,9 +93,17 @@ class TTSManager:
             return False
 
     def stop(self):
-        """Arrête la lecture en cours en incrémentant la session."""
-        self.is_playing = False
-        self.current_session += 1
+        """Arrête la lecture en cours en incrémentant la session et en abortant le flux."""
+        with self.lock:
+            self.is_playing = False
+            self.current_session += 1
+            if self.stream:
+                try:
+                    # abort() est plus radical que stop(), il coupe immédiatement
+                    self.stream.abort()
+                except Exception:
+                    pass
+                self.stream = None
 
     def speak(self, text, on_start=None, on_finish=None):
         """Lit un texte à voix haute en streaming avec gestion de session."""
@@ -103,34 +113,45 @@ class TTSManager:
             return
             
         # Arrêter toute lecture en cours et démarrer une nouvelle session
-        self.stop()
-        
-        self.is_playing = True
-        session_id = self.current_session
+        # On utilise un lock pour s'assurer que l'incrément de session et le flag sont atomiques
+        with self.lock:
+            self.stop()
+            self.is_playing = True
+            session_id = self.current_session
         
         def _speak_thread():
             try:
                 if on_start: on_start()
                 
                 sample_rate = self.voice.config.sample_rate
-                # Démarrer le flux audio avec sounddevice
-                stream = sd.OutputStream(samplerate=sample_rate, channels=1, dtype='int16')
-                stream.start()
-                
-                # Piper génère l'audio par petits morceaux (streaming)
-                for chunk in self.voice.synthesize(text):
-                    # Couper prématurément si demandé ou si une nouvelle session a démarré
-                    if not self.is_playing or session_id != self.current_session:
-                        break 
+                # Utiliser sounddevice avec un gestionnaire de contexte pour plus de sécurité
+                with sd.OutputStream(samplerate=sample_rate, channels=1, dtype='int16') as stream:
+                    self.stream = stream
+                    stream.start()
                     
-                    # chunk.audio_int16_array est un numpy.ndarray
-                    stream.write(chunk.audio_int16_array)
-                    
-                stream.stop()
-                stream.close()
+                    # Piper génère l'audio par petits morceaux (streaming)
+                    for chunk in self.voice.synthesize(text):
+                        # Couper prématurément si demandé ou si une nouvelle session a démarré
+                        if not self.is_playing or session_id != self.current_session:
+                            break 
+                        
+                        # Découper l'audio en petits segments (100ms) pour pouvoir l'interrompre instantanément
+                        audio_data = chunk.audio_int16_array
+                        chunk_size = int(sample_rate * 0.1)
+                        
+                        for i in range(0, len(audio_data), chunk_size):
+                            if not self.is_playing or session_id != self.current_session:
+                                break 
+                            
+                            try:
+                                stream.write(audio_data[i:i+chunk_size])
+                            except Exception:
+                                # Souvent causé par un abort() volontaire
+                                break
             except Exception as e:
                 print(f"[TTS_MANAGER] Erreur lecture TTS: {e}")
             finally:
+                self.stream = None
                 # On ne réinitialise is_playing et on n'appelle on_finish 
                 # que si c'est toujours notre session qui est active
                 if session_id == self.current_session:
