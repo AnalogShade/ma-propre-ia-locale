@@ -304,6 +304,8 @@ Note : Shift + Entrée pour un saut de ligne."""
         threading.Thread(target=self.process_ai_response, args=(msg,), daemon=True).start()
 
     def process_ai_response(self, user_input):
+        print(f"\n[DIAGNOSTIC] RAW USER MESSAGE:\n{user_input}\n")
+        
         # 1. R\u00e9cup\u00e9ration du contexte
         user_summary = self.memory.get_user_info_summary()
         assistant_summary = self.memory.get_assistant_info_summary()
@@ -328,6 +330,7 @@ Note : Shift + Entrée pour un saut de ligne."""
             response = f"Salut {user_name}, je suis là. (Ollama n'a pas renvoyé de texte)"
 
         # 4. Affichage
+        print(f"\n[DIAGNOSTIC] FINAL RESPONSE DISPLAYED IN UI:\n{response}\n")
         self.root.after(0, lambda: self.append_chat(assistant_name, response))
 
         # 5. Mise à jour mémoire (Assistant)

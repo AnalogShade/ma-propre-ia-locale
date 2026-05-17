@@ -8,7 +8,7 @@ class AIEngine:
 
     def get_response(self, context_messages, user_summary="", assistant_summary="", assistant_name=DEFAULT_NAME, files_context=""):
         try:
-            # 1. Construction du prompt syst\u00e8me
+            # 1. Construction du prompt système
             system_content = self.system_prompt.strip().format(name=assistant_name)
             
             if assistant_summary:
@@ -20,14 +20,19 @@ class AIEngine:
             if files_context:
                 system_content += f"\n{files_context}"
 
+            print(f"\n[DIAGNOSTIC] EXACT SYSTEM PROMPT + INJECTED MEMORY:\n{system_content}\n")
+
             # 2. Nettoyage des messages (Strict: role et content uniquement)
             clean_context = [{"role": m["role"], "content": m["content"]} for m in context_messages]
             messages = [{'role': 'system', 'content': system_content}] + clean_context
             
+            print(f"\n[DIAGNOSTIC] FULL PAYLOAD TO OLLAMA:\n{messages}\n")
+
             # 3. Appel Ollama
             response = ollama.chat(model=self.model, messages=messages)
             
             text = response['message']['content'].strip()
+            print(f"\n[DIAGNOSTIC] RAW OLLAMA RESPONSE:\n{text}\n")
             return text if text else None
             
         except Exception as e:
