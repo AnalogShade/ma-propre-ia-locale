@@ -25,6 +25,7 @@ class TTSManager:
         self.current_session = 0
         self.stream = None
         self.lock = threading.RLock()
+        self.volume = 0.5  # Volume par défaut à 50%
         
         # Charger la première voix disponible par défaut
         if self.available_voices:
@@ -144,7 +145,10 @@ class TTSManager:
                                 break 
                             
                             try:
-                                stream.write(audio_data[i:i+chunk_size])
+                                segment = audio_data[i:i+chunk_size]
+                                if self.volume != 1.0:
+                                    segment = (segment * self.volume).astype(np.int16)
+                                stream.write(segment)
                             except Exception:
                                 # Souvent causé par un abort() volontaire
                                 break

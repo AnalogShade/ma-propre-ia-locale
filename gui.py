@@ -35,17 +35,47 @@ class AnnaGUI:
         self.msg_counter = 0
         self.current_tts_tag = None
 
-        # Zone Gauche : Avatar Placeholder
-        self.left_frame = tk.Frame(self.main_container, bg="#1e1e1e", width=256, height=256, highlightbackground="#333333", highlightthickness=1)
-        self.left_frame.pack(side="left", padx=10, pady=10, anchor="n")
+        # Zone Gauche : Conteneur invisible pour empiler l'avatar et les contrôles sous-jacents
+        self.left_panel = tk.Frame(self.main_container, bg="#121212")
+        self.left_panel.pack(side="left", padx=10, pady=10, anchor="n")
+
+        # Zone Gauche : Avatar Placeholder (dans le conteneur gauche)
+        self.left_frame = tk.Frame(self.left_panel, bg="#1e1e1e", width=256, height=256, highlightbackground="#333333", highlightthickness=1)
+        self.left_frame.pack(side="top", anchor="n")
         self.left_frame.pack_propagate(False) 
         
         self.avatar_label = tk.Label(self.left_frame, text="Avatar Anna\n(256x256)", bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 12))
         self.avatar_label.place(relx=0.5, rely=0.5, anchor="center")
 
         # Bouton TTS (Speaker)
-        self.tts_button = tk.Button(self.left_frame, text="\ud83d\udd0a Voix", command=self.show_voice_menu, bg="#333333", fg="white", activebackground="#444444", activeforeground="white", relief="flat")
+        self.tts_button = tk.Button(self.left_frame, text="🔊 Voix", command=self.show_voice_menu, bg="#333333", fg="white", activebackground="#444444", activeforeground="white", relief="flat")
         self.tts_button.pack(side="bottom", pady=(0, 5), fill="x", padx=10)
+
+        # Cadre pour le réglage de volume (placé sous l'avatar dans la zone vide)
+        self.volume_frame = tk.Frame(self.left_panel, bg="#1e1e1e", highlightbackground="#333333", highlightthickness=1)
+        self.volume_frame.pack(side="top", fill="x", pady=(15, 0))
+
+        # Label dynamique pour afficher le niveau du volume avec son icône
+        self.volume_label = tk.Label(self.volume_frame, text="🔉 Volume : 50%", bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 10, "bold"))
+        self.volume_label.pack(anchor="w", padx=15, pady=(10, 5))
+
+        # Glissière de contrôle du volume (tk.Scale)
+        self.volume_scale = tk.Scale(
+            self.volume_frame,
+            from_=0,
+            to=100,
+            orient="horizontal",
+            bg="#1e1e1e",
+            fg="#e0e0e0",
+            troughcolor="#333333",
+            activebackground="#03dac6",
+            highlightthickness=0,
+            bd=0,
+            showvalue=False,
+            command=self.update_volume
+        )
+        self.volume_scale.pack(fill="x", padx=15, pady=(0, 10))
+        self.volume_scale.set(50)  # Correspond au volume 0.5 par défaut
 
         # Chargement de l'image d'avatar
         self.load_avatar()
@@ -139,7 +169,23 @@ class AnnaGUI:
     def _on_tts_download_progress(self, msg):
         self.root.after(0, lambda: self.tts_button.config(text=msg))
         if msg == "Voix pr\u00eate.":
-            self.root.after(2000, lambda: self.tts_button.config(text="\ud83d\udd0a Voix"))
+            self.root.after(2000, lambda: self.tts_button.config(text="🔊 Voix"))
+
+    def update_volume(self, val):
+        """Met à jour le volume dans le TTSManager et actualise le label."""
+        volume_pct = int(val)
+        volume_float = volume_pct / 100.0
+        self.tts_manager.volume = volume_float
+        
+        # Mettre à jour dynamiquement l'icône et le texte
+        if volume_pct == 0:
+            self.volume_label.config(text="🔇 Volume : Muet")
+        elif volume_pct < 30:
+            self.volume_label.config(text=f"🔈 Volume : {volume_pct}%")
+        elif volume_pct < 70:
+            self.volume_label.config(text=f"🔉 Volume : {volume_pct}%")
+        else:
+            self.volume_label.config(text=f"🔊 Volume : {volume_pct}%")
 
     def play_tts(self, message, tag_id):
         # Si on clique sur le même message qui est déjà en cours de lecture : on arrête tout
