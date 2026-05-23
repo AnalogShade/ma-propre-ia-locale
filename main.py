@@ -8,10 +8,12 @@ from settings_manager import SettingsManager
 from gui import AnnaGUI
 from file_manager import FileManager
 from intent_router import IntentRouter
+from code_editor import CodeEditor
 
 def run_console(engine, memory, settings):
     files = FileManager()
     router = IntentRouter()
+    editor = CodeEditor()
     router.model = engine.model
     assistant_name = memory.assistant_profile.get("nom", "Antis")
     
@@ -86,6 +88,9 @@ def run_console(engine, memory, settings):
             memory.add_message("user", user_input)
             memory.add_message("assistant", result.get("system_context"))
             continue
+        elif result.get("action") == "load_context" and result.get("message"):
+            # Notification discrète du chargement de contexte en console sans interruption
+            print(f"\n[SYSTÈME] {result.get('message')}")
 
         # 3. VERIFICATION ETAT AVANT REPONSE IA
         keywords_code = ["fichier", "code", "contenu", "analyse", "lis", "vois"]
@@ -108,6 +113,63 @@ def run_console(engine, memory, settings):
         print(response if response else "...")
         memory.add_message("user", user_input)
         memory.add_message("assistant", response if response else "...")
+
+        # Tâche 3.2 & 3.3 : Interception et confirmation interactive
+        if response:
+            create_blocks = editor.parse_create_blocks(response)
+            edit_blocks = editor.parse_search_replace_blocks(response)
+            
+            if create_blocks or edit_blocks:
+                from pathlib import Path
+                print("\n" + "="*50)
+                print("   PROPOSITIONS DE MODIFICATION DE FICHIERS")
+                print("="*50)
+                
+                # Traitement des créations
+                for block in create_blocks:
+                    print(f"\n[CRÉATION] Fichier ciblé : {block['file_path']}")
+                    print("-" * 40)
+                    print(block['content'])
+                    print("-" * 40)
+                    
+                    choix = input(f"Créer ce fichier dans le répertoire ? (o/n) : ").strip().lower()
+                    if choix == 'o':
+                        success, msg = editor.create_file(block['file_path'], block['content'], working_dir=files.working_dir)
+                        print(f"\n[SYSTÈME] {msg}")
+                        if success:
+                            # Recharger le fichier pour qu'il soit dans le contexte IA
+                            files.load_file(block['file_path'])
+                    else:
+                        print("\n[SYSTÈME] Création annulée.")
+                        
+                # Traitement des modifications
+                for block in edit_blocks:
+                    print(f"\n[MODIFICATION] Fichier ciblé : {block['file_path']}")
+                    print("-" * 40)
+                    print("<<< ANCIEN CODE (SEARCH)")
+                    print(block['search_content'])
+                    print("===")
+                    print(">>> NOUVEAU CODE (REPLACE)")
+                    print(block['replace_content'])
+                    print("-" * 40)
+                    
+                    choix = input(f"Appliquer cette modification ? (o/n) : ").strip().lower()
+                    if choix == 'o':
+                        # Résolution sécurisée du chemin absolu
+                        file_path = block['file_path']
+                        if not Path(file_path).is_absolute() and files.working_dir:
+                            abs_path = (Path(files.working_dir) / file_path).resolve()
+                        else:
+                            abs_path = Path(file_path).resolve()
+                            
+                        success, msg = editor.apply_edit(abs_path, block['search_content'], block['replace_content'])
+                        print(f"\n[SYSTÈME] {msg}")
+                        if success:
+                            # Recharger le fichier mis à jour pour le contexte
+                            files.load_file(block['file_path'])
+                    else:
+                        print("\n[SYSTÈME] Modification annulée.")
+                print("\n" + "="*50)
 
 def main():
     settings = SettingsManager(SETTINGS_FILE)

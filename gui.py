@@ -5,6 +5,7 @@ import os
 from PIL import Image, ImageTk
 from file_manager import FileManager
 from intent_router import IntentRouter
+from code_editor import CodeEditor
 import emotion_manager
 from stt_manager import STTManager
 from tts_manager import TTSManager
@@ -17,6 +18,7 @@ class AnnaGUI:
         self.memory = memory
         self.files = FileManager()
         self.router = IntentRouter()
+        self.editor = CodeEditor()
         
         # Initialisation du gestionnaire de réglages techniques
         self.settings = SettingsManager(SETTINGS_FILE)
@@ -340,6 +342,10 @@ Note : Shift + Entrée pour un saut de ligne."""
             self.append_chat("Système", result.get("message"))
             return True
             
+        # Tâche 4.1 : Notification système pour load_context sans couper le flux
+        if result.get("action") == "load_context" and result.get("message"):
+            self.append_chat("Système", result.get("message"))
+            
         return False
 
     def send_message(self):
@@ -439,7 +445,21 @@ Note : Shift + Entrée pour un saut de ligne."""
 
         # 4. Affichage
         print(f"\n[DIAGNOSTIC] FINAL RESPONSE DISPLAYED IN UI:\n{response}\n")
-        self.root.after(0, lambda: self.append_chat(assistant_name, response))
+        
+        def display_response_and_diffs():
+            self.append_chat(assistant_name, response)
+            
+            # Tâche 4.2 : Parser les propositions
+            create_blocks = self.editor.parse_create_blocks(response)
+            edit_blocks = self.editor.parse_search_replace_blocks(response)
+            
+            # Tâche 4.3 & 4.4 : Afficher les Diffs et les boutons
+            for block in create_blocks:
+                self.show_diff_block(block['file_path'], "create", create_content=block['content'])
+            for block in edit_blocks:
+                self.show_diff_block(block['file_path'], "edit", search_content=block['search_content'], replace_content=block['replace_content'])
+                
+        self.root.after(0, display_response_and_diffs)
 
         # 5. Mise à jour mémoire (Assistant)
         if "Ollama n'a pas renvoyé de texte" not in response:
@@ -513,6 +533,86 @@ Note : Shift + Entrée pour un saut de ligne."""
         self.router.model = model_name
         self.settings.set_setting("selected_model", model_name)
         print(f"[SETTINGS] Modèle configuré à chaud : {model_name}")
+
+    def show_diff_block(self, file_path, block_type, search_content="", replace_content="", create_content=""):
+        """
+        Crée un cadre Tkinter contenant le diff visuel et les boutons interactifs,
+        et l'insère directement dans la zone de chat.
+        """
+        # Activer le chat pour insertion
+        self.chat_area.config(state='normal')
+        
+        # Création du cadre principal du Diff
+        diff_frame = tk.Frame(self.chat_area, bg="#1e1e1e", highlightbackground="#333333", highlightthickness=1, bd=0, padx=10, pady=10)
+        
+        title_text = f"📂 CRÉATION DE FICHIER : {file_path}" if block_type == "create" else f"📂 MODIFICATION DE FICHIER : {file_path}"
+        title = tk.Label(diff_frame, text=title_text, bg="#1e1e1e", fg="#bb86fc", font=("Arial", 10, "bold"), anchor="w")
+        title.pack(fill="x", pady=(0, 5))
+        
+        # Zone de texte de Diff
+        diff_text = tk.Text(diff_frame, wrap=tk.WORD, font=("Consolas", 10), bg="#2d2d2d", fg="#e0e0e0", bd=0, height=8, width=70)
+        diff_text.tag_config("minus", background="#4a1515", foreground="#ff8080")
+        diff_text.tag_config("plus", background="#154a15", foreground="#80ff80")
+        diff_text.tag_config("info", foreground="#888888")
+        
+        if block_type == "create":
+            for line in create_content.splitlines():
+                diff_text.insert(tk.END, f"+ {line}\n", "plus")
+        else:
+            for line in search_content.splitlines():
+                diff_text.insert(tk.END, f"- {line}\n", "minus")
+            diff_text.insert(tk.END, "=========================================\n", "info")
+            for line in replace_content.splitlines():
+                diff_text.insert(tk.END, f"+ {line}\n", "plus")
+                
+        diff_text.config(state="disabled")
+        diff_text.pack(fill="both", expand=True, pady=5)
+        
+        # Cadre pour les boutons
+        btn_frame = tk.Frame(diff_frame, bg="#1e1e1e")
+        btn_frame.pack(fill="x", pady=(5, 0))
+        
+        # État et actions des boutons
+        def on_apply():
+            btn_apply.config(state="disabled")
+            btn_cancel.config(state="disabled")
+            
+            if block_type == "create":
+                success, msg = self.editor.create_file(file_path, create_content, working_dir=self.files.working_dir)
+                self.append_chat("Système", msg)
+                if success:
+                    self.files.load_file(file_path)
+            else:
+                from pathlib import Path
+                if not Path(file_path).is_absolute() and self.files.working_dir:
+                    abs_path = (Path(self.files.working_dir) / file_path).resolve()
+                else:
+                    abs_path = Path(file_path).resolve()
+                    
+                success, msg = self.editor.apply_edit(abs_path, search_content, replace_content)
+                self.append_chat("Système", msg)
+                if success:
+                    self.files.load_file(file_path)
+                    
+        def on_cancel():
+            btn_apply.config(state="disabled")
+            btn_cancel.config(state="disabled")
+            self.append_chat("Système", f"Modification de '{file_path}' annulée.")
+            
+        action_title = "Créer le fichier" if block_type == "create" else "Appliquer"
+        btn_apply = tk.Button(btn_frame, text=f"✓ {action_title}", command=on_apply, bg="#03dac6", fg="black", activebackground="#018786", relief="flat", font=("Arial", 9, "bold"), padx=15, pady=5)
+        btn_apply.pack(side="left", padx=(0, 10))
+        
+        btn_cancel = tk.Button(btn_frame, text="✗ Annuler", command=on_cancel, bg="#444444", fg="white", activebackground="#666666", relief="flat", font=("Arial", 9), padx=15, pady=5)
+        btn_cancel.pack(side="left")
+        
+        # Insertion en tant que fenêtre en ligne dans la chat_area
+        self.chat_area.insert(tk.END, "\n")
+        self.chat_area.window_create(tk.END, window=diff_frame)
+        self.chat_area.insert(tk.END, "\n")
+        
+        self.chat_area.config(state='disabled')
+        self.chat_area.yview(tk.END)
 
     def run(self):
         self.root.mainloop()
