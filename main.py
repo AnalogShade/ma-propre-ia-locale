@@ -3,18 +3,20 @@ import json
 import threading
 from ai_engine import AIEngine
 from memory_manager import MemoryManager
-from config import MODEL_NAME
+from config import SETTINGS_FILE, DEFAULT_MODEL_NAME
+from settings_manager import SettingsManager
 from gui import AnnaGUI
 from file_manager import FileManager
 from intent_router import IntentRouter
 
-def run_console(engine, memory):
+def run_console(engine, memory, settings):
     files = FileManager()
     router = IntentRouter()
+    router.model = engine.model
     assistant_name = memory.assistant_profile.get("nom", "Antis")
     
     def background_memory_task(user_msg):
-        """T\u00e2che d'extraction de faits en arri\u00e8re-plan."""
+        """Tâche d'extraction de faits en arrière-plan."""
         fact = engine.extract_fact(user_msg)
         if fact:
             memory.process_extracted_fact(fact)
@@ -28,10 +30,54 @@ def run_console(engine, memory):
         user_input = input("\nVous : ").strip()
         if not user_input: continue
 
-        # Lancement de l'extraction en arri\u00e8re-plan pour ne pas ralentir la r\u00e9ponse
+        # Lancement de l'extraction en arrière-plan pour ne pas ralentir la réponse
         threading.Thread(target=background_memory_task, args=(user_input,), daemon=True).start()
 
-        # 1. D\u00c9TECTION D'INTENTION SYST\u00c8ME (LLM-First)
+        # Gestion des commandes slash spéciales en mode console
+        if user_input.startswith('/'):
+            parts = user_input.split(' ')
+            cmd = parts[0].lower()
+            
+            if cmd == '/model':
+                if len(parts) > 1:
+                    model_name = parts[1].strip()
+                    models = engine.get_installed_models()
+                    
+                    matched_model = None
+                    if models:
+                        if model_name in models:
+                            matched_model = model_name
+                        else:
+                            for m in models:
+                                if m.split(':')[0] == model_name.split(':')[0]:
+                                    matched_model = m
+                                    break
+                                    
+                    target_model = matched_model if matched_model else model_name
+                    engine.model = target_model
+                    router.model = target_model
+                    settings.set_setting("selected_model", target_model)
+                    print(f"\n[SYSTÈME] Modèle commuté vers : {target_model}")
+                else:
+                    print(f"\n[SYSTÈME] Modèle actuellement actif : {engine.model}. Pour changer, tape : /model <nom>")
+                continue
+            elif cmd == '/clear':
+                memory.clear()
+                print("\n[SYSTÈME] Historique de discussion effacé.")
+                continue
+            elif cmd == '/help':
+                help_text = """COMMANDES CONSOLE DISPONIBLES :
+/model <nom> : Changer le modèle local
+/clear       : Effacer l'historique court terme
+/help        : Afficher cette aide
+/quit        : Quitter l'application"""
+                print(f"\n{help_text}")
+                continue
+            elif cmd == '/quit':
+                print("\nAu revoir !")
+                sys.exit(0)
+
+        # 1. DÉTECTION D'INTENTION SYSTÈME (LLM-First)
         result = router.process_intent(user_input, files)
         if result.get("handled"):
             print(f"\n[SYSTÈME] {result.get('message')}")
@@ -49,7 +95,7 @@ def run_console(engine, memory):
 
         # 4. APPEL IA NORMAL
         print(f"\n{assistant_name} ({engine.model}) : ", end="", flush=True)
-        files_context = files.get_context_for_ai() # Injecte l'\u00e9tat REEL du FileManager
+        files_context = files.get_context_for_ai() # Injecte l'état REEL du FileManager
         assistant_summary = memory.get_assistant_info_summary()
         
         response = engine.get_response(
@@ -64,10 +110,18 @@ def run_console(engine, memory):
         memory.add_message("assistant", response if response else "...")
 
 def main():
+    settings = SettingsManager(SETTINGS_FILE)
+    saved_model = settings.get_setting("selected_model", DEFAULT_MODEL_NAME)
+    
+    engine = AIEngine()
+    engine.model = saved_model
+    
+    memory = MemoryManager()
+    
     if "--console" in sys.argv:
-        run_console(AIEngine(), MemoryManager())
+        run_console(engine, memory, settings)
     else:
-        AnnaGUI(AIEngine(), MemoryManager()).run()
+        AnnaGUI(engine, memory).run()
 
 if __name__ == "__main__":
     main()

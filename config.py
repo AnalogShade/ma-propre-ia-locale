@@ -1,6 +1,7 @@
 # --- CONFIGURATION DE L'IA ---
 
-MODEL_NAME = "llama3"
+DEFAULT_MODEL_NAME = "llama3"
+MODEL_NAME = DEFAULT_MODEL_NAME  # Rétrocompatibilité des imports existants
 DEFAULT_NAME = "Antis"
 
 # Le prompt système définit la "personnalité" de l'IA et ses règles de sécurité.
@@ -39,5 +40,6 @@ HISTORY_FILE = "data/history.json"
 MAX_HISTORY = 100 
 USER_PROFILE_FILE = "data/user_profile.json"
 ASSISTANT_PROFILE_FILE = "data/assistant_profile.json"
+SETTINGS_FILE = "data/settings.json"
 FACTS_FILE = "data/long_term_facts.json"
 CONTEXT_WINDOW = 20

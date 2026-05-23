@@ -8,6 +8,8 @@ from intent_router import IntentRouter
 import emotion_manager
 from stt_manager import STTManager
 from tts_manager import TTSManager
+from config import SETTINGS_FILE, DEFAULT_MODEL_NAME
+from settings_manager import SettingsManager
 
 class AnnaGUI:
     def __init__(self, engine, memory):
@@ -15,6 +17,12 @@ class AnnaGUI:
         self.memory = memory
         self.files = FileManager()
         self.router = IntentRouter()
+        
+        # Initialisation du gestionnaire de réglages techniques
+        self.settings = SettingsManager(SETTINGS_FILE)
+        saved_model = self.settings.get_setting("selected_model", DEFAULT_MODEL_NAME)
+        self.engine.model = saved_model
+        self.router.model = saved_model
         
         # Fenêtre principale
         self.root = tk.Tk()
@@ -77,6 +85,35 @@ class AnnaGUI:
         self.volume_scale.pack(fill="x", padx=15, pady=(0, 10))
         self.volume_scale.set(50)  # Correspond au volume 0.5 par défaut
 
+        # Cadre pour la sélection du modèle (placé sous la glissière de volume)
+        self.model_frame = tk.Frame(self.left_panel, bg="#1e1e1e", highlightbackground="#333333", highlightthickness=1)
+        self.model_frame.pack(side="top", fill="x", pady=(15, 0))
+
+        self.model_label = tk.Label(self.model_frame, text="🤖 Modèle :", bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 10, "bold"))
+        self.model_label.pack(anchor="w", padx=15, pady=(10, 5))
+
+        self.model_var = tk.StringVar(self.root)
+        self.model_var.set("Détection...")
+
+        # OptionMenu initialisé avec le placeholder
+        self.model_dropdown = tk.OptionMenu(self.model_frame, self.model_var, "Détection...")
+        self.model_dropdown.config(
+            bg="#333333", 
+            fg="white", 
+            activebackground="#444444", 
+            activeforeground="white", 
+            relief="flat", 
+            highlightthickness=0
+        )
+        self.model_dropdown["menu"].config(
+            bg="#333333", 
+            fg="white", 
+            activebackground="#03dac6", 
+            activeforeground="black", 
+            relief="flat"
+        )
+        self.model_dropdown.pack(fill="x", padx=15, pady=(0, 10))
+
         # Chargement de l'image d'avatar
         self.load_avatar()
 
@@ -123,6 +160,9 @@ class AnnaGUI:
 
         # Message de bienvenue
         self.append_chat("Système", "Bienvenue ! Anna est prête. Clique sur le bouton '?' ou tape /help pour l'aide.")
+
+        # Lancement de la détection asynchrone des modèles installés
+        threading.Thread(target=self._detect_models_thread, daemon=True).start()
 
     def _on_stt_ready(self):
         self.root.after(0, lambda: self.mic_button.config(text="\ud83c\udf99\ufe0f", state="normal", fg="white"))
@@ -339,6 +379,28 @@ Note : Shift + Entrée pour un saut de ligne."""
             elif cmd == '/help':
                 self.show_help()
                 return
+            elif cmd == '/model':
+                if len(parts) > 1:
+                    model_name = parts[1].strip()
+                    models = self.engine.get_installed_models()
+                    
+                    matched_model = None
+                    if models:
+                        if model_name in models:
+                            matched_model = model_name
+                        else:
+                            for m in models:
+                                if m.split(':')[0] == model_name.split(':')[0]:
+                                    matched_model = m
+                                    break
+                    
+                    target_model = matched_model if matched_model else model_name
+                    self.on_model_selected(target_model)
+                    self.append_chat("Système", f"Modèle commuté vers : {target_model}")
+                else:
+                    current = self.engine.model
+                    self.append_chat("Système", f"Modèle actuellement actif : {current}. Pour changer, tape : /model <nom>")
+                return
 
         # Détection langage naturel pour les fichiers
         if self.handle_file_intent(msg):
@@ -397,6 +459,60 @@ Note : Shift + Entrée pour un saut de ligne."""
                 self.memory.process_extracted_fact(info)
         
         threading.Thread(target=background_extraction, daemon=True).start()
+
+    def _detect_models_thread(self):
+        """Thread d'arrière-plan pour détecter les modèles Ollama installés."""
+        models = self.engine.get_installed_models()
+        self.root.after(0, lambda: self._update_model_dropdown(models))
+
+    def _update_model_dropdown(self, models):
+        """Met à jour le widget OptionMenu avec la liste des modèles trouvés."""
+        menu = self.model_dropdown["menu"]
+        menu.delete(0, "end")
+        
+        if not models:
+            self.model_var.set("Ollama indisponible")
+            menu.add_command(label="Ollama indisponible", state="disabled")
+            self.model_dropdown.config(state="disabled")
+            self.append_chat("Système", "⚠️ Service Ollama non détecté ou aucun modèle installé localement. Vérifie qu'Ollama est bien démarré.")
+            return
+
+        self.model_dropdown.config(state="normal")
+        
+        for model in models:
+            menu.add_command(label=model, command=lambda m=model: self.on_model_selected(m))
+            
+        current_active = self.engine.model
+        
+        # Recherche d'une correspondance intelligente (ex: "llama3" correspond à "llama3:latest")
+        matched_model = None
+        if current_active in models:
+            matched_model = current_active
+        else:
+            # Recherche d'un modèle de base identique (sans le tag après les deux-points)
+            for m in models:
+                if m.split(':')[0] == current_active.split(':')[0]:
+                    matched_model = m
+                    break
+        
+        if matched_model:
+            self.model_var.set(matched_model)
+            # On synchronise le nom exact du modèle avec tags dans l'application
+            self.engine.model = matched_model
+            self.router.model = matched_model
+        else:
+            fallback_model = models[0]
+            self.model_var.set(fallback_model)
+            self.on_model_selected(fallback_model)
+            self.append_chat("Système", f"Modèle '{current_active}' non trouvé localement. Repli sur : {fallback_model}")
+
+    def on_model_selected(self, model_name):
+        """Callback appelé lors de la sélection d'un modèle."""
+        self.model_var.set(model_name)
+        self.engine.model = model_name
+        self.router.model = model_name
+        self.settings.set_setting("selected_model", model_name)
+        print(f"[SETTINGS] Modèle configuré à chaud : {model_name}")
 
     def run(self):
         self.root.mainloop()

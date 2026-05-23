@@ -17,6 +17,39 @@ class AIEngine:
         self.model = MODEL_NAME
         self.system_prompt = SYSTEM_PROMPT
 
+    def get_installed_models(self):
+        """
+        Interroge Ollama localement pour obtenir la liste des modèles installés.
+        Retourne une liste de chaînes (les noms des modèles).
+        Retourne une liste vide si Ollama n'est pas démarré ou en cas d'erreur.
+        """
+        try:
+            models_info = ollama.list()
+            
+            models_list = []
+            if hasattr(models_info, 'models'):
+                models_list = models_info.models
+            elif isinstance(models_info, dict):
+                models_list = models_info.get('models', [])
+            else:
+                models_list = models_info
+                
+            names = []
+            for m in models_list:
+                if hasattr(m, 'model'):
+                    names.append(m.model)
+                elif isinstance(m, dict) and 'model' in m:
+                    names.append(m['model'])
+                elif isinstance(m, dict) and 'name' in m:
+                    names.append(m['name'])
+                elif hasattr(m, 'name'):
+                    names.append(m.name)
+            return names
+        except Exception as e:
+            # On loggue l'erreur de manière non-bloquante sans faire planter l'application
+            print(f"\n[DEBUG: Impossible de joindre Ollama pour lister les modèles -> {e}]")
+            return []
+
     def get_response(self, context_messages, user_summary="", assistant_summary="", assistant_name=DEFAULT_NAME, files_context="", model_name=None):
         try:
             # 1. Construction du prompt système

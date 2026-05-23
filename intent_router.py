@@ -1,10 +1,10 @@
 import json
 import ollama
-from config import MODEL_NAME
+from config import DEFAULT_MODEL_NAME
 
 class IntentRouter:
     def __init__(self):
-        self.model = MODEL_NAME
+        self.model = DEFAULT_MODEL_NAME
 
     def get_file_intent(self, user_input):
         prompt = f"""Analyse UNIQUEMENT si le message utilisateur contient une commande EXPLICITE li\u00e9e aux fichiers ou aux r\u00e9pertoires.
