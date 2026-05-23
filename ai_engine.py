@@ -1,12 +1,23 @@
+import sys
 import ollama
 from config import MODEL_NAME, SYSTEM_PROMPT, DEFAULT_NAME
+
+def _safe_print(text):
+    try:
+        print(text)
+    except Exception:
+        try:
+            encoding = sys.stdout.encoding or 'utf-8'
+            print(text.encode(encoding, errors='replace').decode(encoding))
+        except Exception:
+            pass
 
 class AIEngine:
     def __init__(self):
         self.model = MODEL_NAME
         self.system_prompt = SYSTEM_PROMPT
 
-    def get_response(self, context_messages, user_summary="", assistant_summary="", assistant_name=DEFAULT_NAME, files_context=""):
+    def get_response(self, context_messages, user_summary="", assistant_summary="", assistant_name=DEFAULT_NAME, files_context="", model_name=None):
         try:
             # 1. Construction du prompt système
             system_content = self.system_prompt.strip().format(name=assistant_name)
@@ -20,23 +31,24 @@ class AIEngine:
             if files_context:
                 system_content += f"\n{files_context}"
 
-            print(f"\n[DIAGNOSTIC] EXACT SYSTEM PROMPT + INJECTED MEMORY:\n{system_content}\n")
+            _safe_print(f"\n[DIAGNOSTIC] EXACT SYSTEM PROMPT + INJECTED MEMORY:\n{system_content}\n")
 
             # 2. Nettoyage des messages (Strict: role et content uniquement)
             clean_context = [{"role": m["role"], "content": m["content"]} for m in context_messages]
             messages = [{'role': 'system', 'content': system_content}] + clean_context
             
-            print(f"\n[DIAGNOSTIC] FULL PAYLOAD TO OLLAMA:\n{messages}\n")
+            target_model = model_name if model_name else self.model
+            _safe_print(f"\n[DIAGNOSTIC] FULL PAYLOAD TO OLLAMA (Model: {target_model}):\n{messages}\n")
 
             # 3. Appel Ollama
-            response = ollama.chat(model=self.model, messages=messages)
+            response = ollama.chat(model=target_model, messages=messages)
             
             text = response['message']['content'].strip()
-            print(f"\n[DIAGNOSTIC] RAW OLLAMA RESPONSE:\n{text}\n")
+            _safe_print(f"\n[DIAGNOSTIC] RAW OLLAMA RESPONSE (Model: {target_model}):\n{text}\n")
             return text if text else None
             
         except Exception as e:
-            print(f"\n[DEBUG: Erreur critique Ollama -> {e}]")
+            _safe_print(f"\n[DEBUG: Erreur critique Ollama -> {e}]")
             return None
 
     def extract_fact(self, last_user_message):
