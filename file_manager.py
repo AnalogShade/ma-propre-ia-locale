@@ -83,8 +83,15 @@ class FileManager:
             self.last_file_load_success = True
             self.last_file_error = None
             
+            filename = abs_path.name
+            num_lines = len(content.splitlines())
+            msg = (
+                f"Fichier chargé : {filename}\n"
+                f"Nombre de lignes : {num_lines}"
+            )
+            
             print(f"  [DEBUG FILE_MANAGER] succès : True")
-            return True, f"Fichier chargé."
+            return True, msg
 
         except Exception as e:
             self._reset_current_file(str(e))
