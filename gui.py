@@ -165,8 +165,12 @@ class AnnaGUI:
         # Lancement de la détection asynchrone des modèles installés
         threading.Thread(target=self._detect_models_thread, daemon=True).start()
 
+    # =========================================================================
+    # SECTION AUDIO : GESTION LOCALE DU MICRO (STT) ET DE LA VOIX (TTS)
+    # =========================================================================
+
     def _on_stt_ready(self):
-        self.root.after(0, lambda: self.mic_button.config(text="\ud83c\udf99\ufe0f", state="normal", fg="white"))
+        self.root.after(0, lambda: self.mic_button.config(text="🎙️", state="normal", fg="white"))
 
     def _on_stt_error(self, err_msg):
         self.root.after(0, lambda: self.mic_button.config(text="\u274c", state="disabled"))
@@ -184,7 +188,7 @@ class AnnaGUI:
 
     def _on_transcription_done(self, text):
         def update_gui():
-            self.mic_button.config(text="\ud83c\udf99\ufe0f", fg="white", state="normal")
+            self.mic_button.config(text="🎙️", fg="white", state="normal")
             if text:
                 self.user_input.insert(tk.END, text + " ")
         self.root.after(0, update_gui)
@@ -370,77 +374,47 @@ Note : Shift + Entrée pour un saut de ligne."""
                     self.append_chat("Système", slash_result.get("message"))
                 return
 
-        # Détection langage naturel pour les fichiers
-        if self.handle_file_intent(msg):
-            # Si une action système est détectée et exécutée, on arrête le flux ici.
-            # L'IA ne répondra pas conversationnellement pour éviter les doublons.
-            return
-
         # Lancer le traitement dans un thread pour ne pas geler l'interface
         threading.Thread(target=self.process_ai_response, args=(msg,), daemon=True).start()
 
     def process_ai_response(self, user_input):
         print(f"\n[DIAGNOSTIC] RAW USER MESSAGE:\n{user_input}\n")
         
-        # 1. R\u00e9cup\u00e9ration du contexte
-        user_summary = self.memory.get_user_info_summary()
-        assistant_summary = self.memory.get_assistant_info_summary()
-        files_context = self.files.get_context_for_ai()
-        assistant_name = self.memory.assistant_profile.get("nom", "Anna")
-        
-        # 2. Mise \u00e0 jour m\u00e9moire (Message utilisateur)
-        self.memory.add_message("user", user_input)
-        context = self.memory.get_context()
- 
-        # 3. Appel IA
-        response = self.engine.get_response(
-            context, 
-            user_summary=user_summary, 
-            assistant_summary=assistant_summary,
-            assistant_name=assistant_name, 
-            files_context=files_context
-        )
-        
-        if not response:
-            user_name = self.memory.user_profile.get("prénom", "Louis")
-            response = f"Salut {user_name}, je suis là. (Ollama n'a pas renvoyé de texte)"
-
-        # 4. Affichage
-        print(f"\n[DIAGNOSTIC] FINAL RESPONSE DISPLAYED IN UI:\n{response}\n")
+        # Délégation de tout le traitement métier (Intentions, IA, émotions, diffs) au contrôleur unifié
+        result = self.ctrl.process_user_message_sync(user_input)
         
         def display_response_and_diffs():
-            self.append_chat(assistant_name, response)
+            res_type = result.get("type")
+            assistant_name = self.memory.assistant_profile.get("nom", "Anna")
             
-            # Tâche 4.2 : Parser les propositions
-            create_blocks = self.editor.parse_create_blocks(response)
-            edit_blocks = self.editor.parse_search_replace_blocks(response)
-            
-            # Tâche 4.3 & 4.4 : Afficher les Diffs et les boutons
-            for block in create_blocks:
-                self.show_diff_block(block['file_path'], "create", create_content=block['content'])
-            for block in edit_blocks:
-                self.show_diff_block(block['file_path'], "edit", search_content=block['search_content'], replace_content=block['replace_content'])
+            if res_type == "intent_handled":
+                self.append_chat("Système", result.get("message"))
                 
+            elif res_type == "error":
+                self.append_chat(assistant_name, result.get("message"))
+                
+            elif res_type == "ai_response" or res_type == "text":
+                # Affichage sémantique du chargement de fichier
+                if result.get("system_notification"):
+                    self.append_chat("Système", result.get("system_notification"))
+                    
+                response = result.get("content")
+                self.append_chat(assistant_name, response)
+                
+                # Mise à jour émotionnelle de l'avatar
+                emotion = result.get("emotion", "neutral")
+                self.update_avatar(emotion)
+                
+                # Parsing et rendu visuel interactif des diffs
+                create_blocks = result.get("create_blocks", [])
+                edit_blocks = result.get("edit_blocks", [])
+                
+                for block in create_blocks:
+                    self.show_diff_block(block['file_path'], "create", create_content=block['content'])
+                for block in edit_blocks:
+                    self.show_diff_block(block['file_path'], "edit", search_content=block['search_content'], replace_content=block['replace_content'])
+                    
         self.root.after(0, display_response_and_diffs)
-
-        # 5. Mise à jour mémoire (Assistant)
-        if "Ollama n'a pas renvoyé de texte" not in response:
-            self.memory.add_message("assistant", response)
-
-        # 6. Émotions (Nouveau)
-        try:
-            emotion = emotion_manager.detect_emotion(response)
-            self.root.after(0, lambda: self.update_avatar(emotion))
-        except Exception as e:
-            print(f"Erreur détection émotion: {e}")
-
-        # 7. Extraction en arri\u00e8re-plan (Parall\u00e8le \u00e0 la r\u00e9ponse)
-        def background_extraction():
-            info = self.engine.extract_fact(user_input)
-            if info:
-                self.memory.process_extracted_fact(info)
-        
-        threading.Thread(target=background_extraction, daemon=True).start()
 
     def _detect_models_thread(self):
         """Thread d'arrière-plan pour détecter les modèles Ollama installés."""
