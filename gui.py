@@ -3,18 +3,12 @@ from tkinter import scrolledtext, messagebox
 import threading
 import os
 from PIL import Image, ImageTk
-from file_manager import FileManager
-from intent_router import IntentRouter
-from code_editor import CodeEditor
-import emotion_manager
 from stt_manager import STTManager
 from tts_manager import TTSManager
-from config import SETTINGS_FILE, DEFAULT_MODEL_NAME
-from settings_manager import SettingsManager
+from agent_controller import AgentController
 
 class AnnaGUI:
     def __init__(self, engine, memory):
-        from agent_controller import AgentController
         self.ctrl = AgentController()
         
         # Liaison dynamique pour conserver la compatibilité des anciens attributs graphiques

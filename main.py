@@ -1,14 +1,9 @@
 import sys
-import json
-import threading
 from ai_engine import AIEngine
 from memory_manager import MemoryManager
 from config import SETTINGS_FILE, DEFAULT_MODEL_NAME
 from settings_manager import SettingsManager
 from gui import AnnaGUI
-from file_manager import FileManager
-from intent_router import IntentRouter
-from code_editor import CodeEditor
 
 def run_console(ctrl):
     assistant_name = ctrl.memory.assistant_profile.get("nom", "Anna")
