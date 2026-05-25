@@ -1,0 +1,213 @@
+import threading
+from config import SETTINGS_FILE, DEFAULT_MODEL_NAME
+from settings_manager import SettingsManager
+from ai_engine import AIEngine
+from memory_manager import MemoryManager
+from file_manager import FileManager
+from intent_router import IntentRouter
+from code_editor import CodeEditor
+
+class AgentController:
+    def __init__(self):
+        """
+        Initialise le contrôleur central d'Anna.
+        Ce contrôleur regroupe et coordonne tous les services métiers :
+        - Réglages techniques (SettingsManager)
+        - Moteur IA local (AIEngine)
+        - Mémoire long terme et court terme (MemoryManager)
+        - Gestion de fichiers et contexte (FileManager)
+        - Routeur d'intentions sémantiques (IntentRouter)
+        - Éditeur de code sécurisé (CodeEditor)
+        """
+        # 1. Chargement et configuration des réglages
+        self.settings = SettingsManager(SETTINGS_FILE)
+        saved_model = self.settings.get_setting("selected_model", DEFAULT_MODEL_NAME)
+        
+        # 2. Initialisation des gestionnaires métiers
+        self.engine = AIEngine()
+        self.engine.model = saved_model
+        
+        self.memory = MemoryManager()
+        self.files = FileManager()
+        
+        self.router = IntentRouter()
+        self.router.model = saved_model
+        
+        self.editor = CodeEditor()
+
+    def change_model(self, model_name):
+        """
+        Permet de commuter intelligemment le modèle Ollama actif.
+        Vérifie la présence locale du modèle et met à jour les réglages de manière persistante.
+        """
+        models = self.engine.get_installed_models()
+        matched_model = None
+        if models:
+            if model_name in models:
+                matched_model = model_name
+            else:
+                # Match intelligent (ex: "llama3" correspond à "llama3:latest")
+                for m in models:
+                    if m.split(':')[0] == model_name.split(':')[0]:
+                        matched_model = m
+                        break
+        
+        target_model = matched_model if matched_model else model_name
+        self.engine.model = target_model
+        self.router.model = target_model
+        self.settings.set_setting("selected_model", target_model)
+        return target_model
+
+    def clear_history(self):
+        """Efface l'historique court terme en mémoire."""
+        self.memory.clear()
+
+    def _trigger_background_memory_task(self, user_msg):
+        """Lance une tâche asynchrone en tâche de fond pour l'extraction de faits en mémoire."""
+        def task():
+            try:
+                fact = self.engine.extract_fact(user_msg)
+                if fact:
+                    self.memory.process_extracted_fact(fact)
+            except Exception as e:
+                print(f"[CONTROLLER WARNING] Échec de l'extraction de faits en arrière-plan : {e}")
+                
+        threading.Thread(target=task, daemon=True).start()
+
+    def process_slash_command(self, msg):
+        """
+        Détecte et traite une commande slash.
+        Retourne un dictionnaire unifié contenant les informations de résultat si c'est une commande slash,
+        ou None s'il s'agit d'un message en langage naturel normal.
+        """
+        clean_msg = msg.strip()
+        if not clean_msg.startswith('/'):
+            return None
+            
+        parts = clean_msg.split(' ')
+        cmd = parts[0].lower()
+        
+        if cmd == '/model':
+            if len(parts) > 1:
+                model_name = parts[1].strip()
+                target_model = self.change_model(model_name)
+                return {"handled": True, "action": "change_model", "message": f"Modèle commuté vers : {target_model}"}
+            else:
+                return {"handled": True, "action": "get_model", "message": f"Modèle actuellement actif : {self.engine.model}. Pour changer, tape : /model <nom>"}
+                
+        elif cmd == '/clear':
+            self.clear_history()
+            return {"handled": True, "action": "clear_history", "message": "Historique de discussion effacé."}
+            
+        elif cmd == '/openfile' and len(parts) > 1:
+            success, response = self.files.load_file(parts[1])
+            return {"handled": True, "action": "open_file", "success": success, "message": response}
+            
+        elif cmd == '/listfiles':
+            return {"handled": True, "action": "list_files", "message": self.files.list_files()}
+            
+        elif cmd == '/closefile' and len(parts) > 1:
+            success, response = self.files.close_file(parts[1])
+            return {"handled": True, "action": "close_file", "success": success, "message": response}
+            
+        elif cmd == '/reloadfile' and len(parts) > 1:
+            success, response = self.files.load_file(parts[1])
+            return {"handled": True, "action": "reload_file", "success": success, "message": f"{response} (Rechargé)"}
+            
+        elif cmd == '/help':
+            help_text = """COMMANDES DISPONIBLES :
+/model <nom>       : Changer le modèle Ollama
+/clear             : Effacer l'historique de discussion court terme
+/openfile <chemin> : Charger un fichier texte dans le contexte
+/listfiles         : Voir les fichiers chargés ou disponibles
+/closefile <nom>   : Fermer le fichier actif
+/reloadfile <nom>  : Recharger le fichier modifié
+/help              : Afficher cette aide
+/quit              : Quitter l'application (en mode console)"""
+            return {"handled": True, "action": "help", "message": help_text}
+            
+        elif cmd == '/quit':
+            return {"handled": True, "action": "quit", "message": "Au revoir !"}
+            
+        return {"handled": True, "action": "unknown", "message": f"Commande slash inconnue : {cmd}"}
+
+    def process_user_message_sync(self, user_input):
+        """
+        Traite un message utilisateur en langage naturel de manière synchrone.
+        Retourne un dictionnaire unifié contenant les résultats IA et système.
+        """
+        # 1. Lancement de l'extraction de faits en tâche de fond
+        self._trigger_background_memory_task(user_input)
+        
+        # 2. Détection d'intention sémantique via IntentRouter (LLM-First)
+        intent_result = self.router.process_intent(user_input, self.files)
+        if intent_result.get("handled"):
+            # Enregistrement système dans la mémoire pour préserver l'historique court terme
+            self.memory.add_message("user", user_input)
+            self.memory.add_message("assistant", intent_result.get("system_context"))
+            return {
+                "type": "intent_handled",
+                "action": intent_result.get("action"),
+                "message": intent_result.get("message"),
+                "system_context": intent_result.get("system_context")
+            }
+            
+        # 3. Vérification garde-fou : besoin d'un fichier actif pour certaines requêtes
+        keywords_code = ["fichier", "code", "contenu", "analyse", "lis", "vois"]
+        if not self.files.last_file_load_success and any(k in user_input.lower() for k in keywords_code):
+            assistant_name = self.memory.assistant_profile.get("nom", "Anna")
+            msg = f"Aucun fichier n'est chargé. Utilise 'ouvre [fichier]' après avoir défini ton répertoire."
+            return {
+                "type": "error",
+                "message": msg
+            }
+            
+        # 4. Appel de l'IA principal
+        user_summary = self.memory.get_user_info_summary()
+        assistant_summary = self.memory.get_assistant_info_summary()
+        files_context = self.files.get_context_for_ai()
+        assistant_name = self.memory.assistant_profile.get("nom", "Anna")
+        
+        self.memory.add_message("user", user_input)
+        context = self.memory.get_context()
+        
+        response = self.engine.get_response(
+            context,
+            user_summary=user_summary,
+            assistant_summary=assistant_summary,
+            assistant_name=assistant_name,
+            files_context=files_context
+        )
+        
+        if not response:
+            user_name = self.memory.user_profile.get("prénom", "Louis")
+            response = f"Salut {user_name}, je suis là. (Ollama n'a pas renvoyé de texte)"
+            return {
+                "type": "text",
+                "content": response,
+                "system_notification": intent_result.get("message") if intent_result.get("action") == "load_context" else None
+            }
+            
+        # Enregistrement de la réponse dans l'historique
+        self.memory.add_message("assistant", response)
+        
+        # Détection d'émotion associée
+        emotion = "neutral"
+        try:
+            import emotion_manager
+            emotion = emotion_manager.detect_emotion(response)
+        except Exception as e:
+            print(f"[CONTROLLER WARNING] Échec de la détection d'émotion : {e}")
+            
+        # Analyse des propositions de modifications de fichiers (diffs)
+        create_blocks = self.editor.parse_create_blocks(response)
+        edit_blocks = self.editor.parse_search_replace_blocks(response)
+        
+        return {
+            "type": "ai_response",
+            "content": response,
+            "emotion": emotion,
+            "create_blocks": create_blocks,
+            "edit_blocks": edit_blocks,
+            "system_notification": intent_result.get("message") if intent_result.get("action") == "load_context" else None
+        }
