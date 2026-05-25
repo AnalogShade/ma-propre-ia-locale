@@ -14,17 +14,16 @@ from settings_manager import SettingsManager
 
 class AnnaGUI:
     def __init__(self, engine, memory):
-        self.engine = engine
-        self.memory = memory
-        self.files = FileManager()
-        self.router = IntentRouter()
-        self.editor = CodeEditor()
+        from agent_controller import AgentController
+        self.ctrl = AgentController()
         
-        # Initialisation du gestionnaire de réglages techniques
-        self.settings = SettingsManager(SETTINGS_FILE)
-        saved_model = self.settings.get_setting("selected_model", DEFAULT_MODEL_NAME)
-        self.engine.model = saved_model
-        self.router.model = saved_model
+        # Liaison dynamique pour conserver la compatibilité des anciens attributs graphiques
+        self.engine = self.ctrl.engine
+        self.memory = self.ctrl.memory
+        self.files = self.ctrl.files
+        self.router = self.ctrl.router
+        self.editor = self.ctrl.editor
+        self.settings = self.ctrl.settings
         
         # Fenêtre principale
         self.root = tk.Tk()
@@ -360,52 +359,15 @@ Note : Shift + Entrée pour un saut de ligne."""
 
         # Gestion des commandes spéciales (Fichiers)
         if msg.startswith('/'):
-            parts = msg.split(' ')
-            cmd = parts[0].lower()
-            
-            if cmd == '/openfile' and len(parts) > 1:
-                success, response = self.files.load_file(parts[1])
-                self.append_chat("Système", response)
-                return
-            elif cmd == '/listfiles':
-                self.append_chat("Système", self.files.list_files())
-                return
-            elif cmd == '/closefile' and len(parts) > 1:
-                success, response = self.files.close_file(parts[1])
-                self.append_chat("Système", response)
-                return
-            elif cmd == '/reloadfile' and len(parts) > 1:
-                success, response = self.files.load_file(parts[1])
-                self.append_chat("Système", f"{response} (Rechargé)")
-                return
-            elif cmd == '/clear':
-                self.memory.clear()
-                self.append_chat("Système", "Historique effacé.")
-                return
-            elif cmd == '/help':
-                self.show_help()
-                return
-            elif cmd == '/model':
-                if len(parts) > 1:
-                    model_name = parts[1].strip()
-                    models = self.engine.get_installed_models()
-                    
-                    matched_model = None
-                    if models:
-                        if model_name in models:
-                            matched_model = model_name
-                        else:
-                            for m in models:
-                                if m.split(':')[0] == model_name.split(':')[0]:
-                                    matched_model = m
-                                    break
-                    
-                    target_model = matched_model if matched_model else model_name
-                    self.on_model_selected(target_model)
-                    self.append_chat("Système", f"Modèle commuté vers : {target_model}")
+            slash_result = self.ctrl.process_slash_command(msg)
+            if slash_result:
+                if slash_result.get("action") == "help":
+                    self.show_help()
+                elif slash_result.get("action") == "change_model":
+                    self.append_chat("Système", slash_result.get("message"))
+                    self.model_var.set(self.ctrl.engine.model)
                 else:
-                    current = self.engine.model
-                    self.append_chat("Système", f"Modèle actuellement actif : {current}. Pour changer, tape : /model <nom>")
+                    self.append_chat("Système", slash_result.get("message"))
                 return
 
         # Détection langage naturel pour les fichiers
