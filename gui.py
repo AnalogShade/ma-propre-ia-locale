@@ -734,12 +734,20 @@ Note : Shift + Entrée pour un saut de ligne."""
 
     def toggle_image_generation_mode(self):
         """Bascule le mode de génération d'image de façon conversationnelle (LLM-First)."""
-        # 1. Démarrer la session dans le contrôleur principal (MVC)
-        self.ctrl.start_image_session()
-        
-        # 2. Mettre à jour visuellement le bouton et notifier l'utilisateur dans le chat
-        self.sd_generate_button.config(text="🎨 Mode Image Actif", bg="#bb86fc", fg="black")
-        self.append_chat("Système", "[🎨 MODE IMAGE ACTIVÉ] Décrivez l'image que vous souhaitez générer ci-dessous. (ex: 'Un petit chat astronaute')")
+        if self.ctrl.image_manager.is_active():
+            # 1. Annuler la session dans le contrôleur principal (MVC)
+            self.ctrl.image_manager.cancel_session()
+            
+            # 2. Restaurer l'apparence d'origine du bouton et notifier dans le chat
+            self.sd_generate_button.config(text="🖼️ Générer une Image", bg="#333333", fg="white")
+            self.append_chat("Système", "[🎨 MODE IMAGE DÉSACTIVÉ] Retour au mode discussion standard.")
+        else:
+            # 1. Démarrer la session dans le contrôleur principal (MVC)
+            self.ctrl.start_image_session()
+            
+            # 2. Mettre à jour visuellement le bouton et notifier l'utilisateur dans le chat
+            self.sd_generate_button.config(text="🎨 Mode Image Actif", bg="#bb86fc", fg="black")
+            self.append_chat("Système", "[🎨 MODE IMAGE ACTIVÉ] Décrivez l'image que vous souhaitez générer ci-dessous. (ex: 'Un petit chat astronaute'). Réappuyez sur ce bouton pour désactiver le mode.")
 
     def show_image_proposal_block(self, proposal, system_message):
         """Affiche une carte de pré-génération stylisée avec tous les paramètres SD, directement dans le chat."""
@@ -771,11 +779,11 @@ Note : Shift + Entrée pour un saut de ligne."""
             row.pack(fill="x", pady=2)
             lbl = tk.Label(row, text=f"• {label} ", bg="#1e1e1e", fg="#03dac6", font=("Arial", 9, "bold"), anchor="w", width=16)
             lbl.pack(side="left")
-            val_lbl = tk.Label(row, text=val, bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 9), anchor="w", justify="left", wrap=True)
+            val_lbl = tk.Label(row, text=val, bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 9), anchor="w", justify="left", wraplength=450)
             val_lbl.pack(side="left", fill="x", expand=True)
 
         # Message d'instruction
-        msg_lbl = tk.Label(card_frame, text=f"\n💬 {system_message}", bg="#1e1e1e", fg="#a0a0a0", font=("Arial", 9, "italic"), justify="left", wrap=True)
+        msg_lbl = tk.Label(card_frame, text=f"\n💬 {system_message}", bg="#1e1e1e", fg="#a0a0a0", font=("Arial", 9, "italic"), justify="left", wraplength=450)
         msg_lbl.pack(fill="x", pady=(5, 0))
         
         # Insertion dans le chat
@@ -828,7 +836,7 @@ Note : Shift + Entrée pour un saut de ligne."""
             row.pack(fill="x", pady=2)
             lbl = tk.Label(row, text=f"• {label} ", bg="#1e1e1e", fg="#bb86fc", font=("Arial", 9, "bold"), anchor="w", width=15)
             lbl.pack(side="left")
-            val_lbl = tk.Label(row, text=val, bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 9), anchor="w", justify="left", wrap=True)
+            val_lbl = tk.Label(row, text=val, bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 9), anchor="w", justify="left", wraplength=450)
             val_lbl.pack(side="left", fill="x", expand=True)
             
         # Insertion dans le chat
