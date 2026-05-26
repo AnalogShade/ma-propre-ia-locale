@@ -432,6 +432,12 @@ Note : Shift + Entrée pour un saut de ligne."""
                     self.append_chat("Système", slash_result.get("message"))
                 return
 
+        # Interception de confirmation de génération d'image pour démarrer le polling
+        if msg.strip().lower() == "ok" and self.ctrl.image_manager.is_active() and self.ctrl.image_manager.state.get("step") == "waiting_for_confirmation":
+            self.sd_generating = True
+            self.show_progress_block()
+            threading.Thread(target=self._poll_sd_progress_thread, daemon=True).start()
+
         # Lancer le traitement dans un thread pour ne pas geler l'interface
         threading.Thread(target=self.process_ai_response, args=(msg,), daemon=True).start()
 
@@ -442,6 +448,10 @@ Note : Shift + Entrée pour un saut de ligne."""
         result = self.ctrl.process_user_message_sync(user_input)
         
         def display_response_and_diffs():
+            # Arrêt propre du thread de progression et retrait du bloc temporaire
+            self.sd_generating = False
+            self.remove_progress_block()
+            
             res_type = result.get("type")
             assistant_name = self.memory.assistant_profile.get("nom", "Anna")
             
@@ -451,6 +461,10 @@ Note : Shift + Entrée pour un saut de ligne."""
                 return
             elif res_type == "image_simulation_result":
                 self.show_image_simulation_block(result.get("content"))
+                self.sd_generate_button.config(text="🖼️ Générer une Image", bg="#333333", fg="white")
+                return
+            elif res_type == "image_generation_result":
+                self.show_real_image_block(result.get("content"))
                 self.sd_generate_button.config(text="🖼️ Générer une Image", bg="#333333", fg="white")
                 return
             elif res_type == "image_cancelled":
@@ -466,7 +480,14 @@ Note : Shift + Entrée pour un saut de ligne."""
                 self.append_chat("Système", result.get("message"))
                 
             elif res_type == "error":
-                self.append_chat(assistant_name, result.get("message"))
+                # Réinitialisation sécurisée de l'interface en cas de crash durant le mode image
+                if self.ctrl.image_manager.is_active() or self.sd_generate_button.cget("text") == "🎨 Mode Image Actif":
+                    self.sd_generate_button.config(text="🖼️ Générer une Image", bg="#333333", fg="white")
+                    self.ctrl.image_manager.cancel_session()
+                
+                # Rendu graphique sous forme d'un magnifique encadré rouge
+                self.show_error_block("ÉCHEC DE LA GÉNÉRATION", result.get("message"))
+                return
                 
             elif res_type == "ai_response" or res_type == "text":
                 # Affichage sémantique du chargement de fichier
@@ -787,6 +808,156 @@ Note : Shift + Entrée pour un saut de ligne."""
         msg_lbl.pack(fill="x", pady=(5, 0))
         
         # Insertion dans le chat
+        self.chat_area.insert(tk.END, "\n")
+        self.chat_area.window_create(tk.END, window=card_frame)
+        self.chat_area.insert(tk.END, "\n")
+        
+        self.chat_area.config(state='disabled')
+        self.chat_area.yview(tk.END)
+
+    def show_real_image_block(self, result_content):
+        """Affiche une carte graphique de génération réelle contenant l'image PNG et ses métadonnées."""
+        self.chat_area.config(state='normal')
+        
+        # 1. Chargement et redimensionnement fluide de l'image via PIL
+        image_path = result_content.get("image_path")
+        photo = None
+        if image_path and os.path.exists(image_path):
+            try:
+                img = Image.open(image_path)
+                img.thumbnail((350, 350), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+            except Exception as e:
+                print(f"[GUI ERROR] Erreur lors du rendu de l'image physique : {e}")
+
+        # 2. Création de la carte stylisée (bordure violette pour la génération réelle)
+        card_frame = tk.Frame(self.chat_area, bg="#1e1e1e", highlightbackground="#bb86fc", highlightthickness=1, bd=0, padx=15, pady=12)
+        
+        # En-tête de la carte
+        title = tk.Label(card_frame, text="✨ GÉNÉRATION D'IMAGE RÉELLE TERMINÉE ✨", bg="#1e1e1e", fg="#bb86fc", font=("Arial", 10, "bold"), anchor="w")
+        title.pack(fill="x", pady=(0, 8))
+        
+        # 3. Widget d'affichage de l'image (avec sauvegarde de la référence Tkinter)
+        if photo:
+            img_label = tk.Label(card_frame, image=photo, bg="#1e1e1e")
+            img_label.pack(pady=10)
+            card_frame.photo = photo  # Prévention stricte du garbage collection
+        else:
+            err_label = tk.Label(card_frame, text="⚠️ Impossible d'afficher l'image physique.", bg="#1e1e1e", fg="#cf6679", font=("Arial", 10, "italic"))
+            err_label.pack(pady=10)
+
+        # 4. Panneau des métadonnées de génération (Seed, Checkpoint, Sampler, etc.)
+        details_frame = tk.Frame(card_frame, bg="#1e1e1e")
+        details_frame.pack(fill="x", pady=(5, 0))
+        
+        params = result_content.get("params", {})
+        details = [
+            ("Prompt Final :", params.get("prompt", "")),
+            ("Checkpoint :", params.get("checkpoint", "") or "Par défaut"),
+            ("Seed finale :", str(params.get("seed", ""))),
+            ("Sampler :", params.get("sampler", "Euler a")),
+            ("Steps / CFG :", f"{params.get('steps', 25)} steps / {params.get('cfg_scale', 7.5)} CFG")
+        ]
+        
+        for label, val in details:
+            row = tk.Frame(details_frame, bg="#1e1e1e")
+            row.pack(fill="x", pady=2)
+            lbl = tk.Label(row, text=f"• {label} ", bg="#1e1e1e", fg="#03dac6", font=("Arial", 9, "bold"), anchor="w", width=15)
+            lbl.pack(side="left")
+            val_lbl = tk.Label(row, text=val, bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 9), anchor="w", justify="left", wraplength=450)
+            val_lbl.pack(side="left", fill="x", expand=True)
+
+        # 5. Insertion en tant que fenêtre en ligne dans la chat_area
+        self.chat_area.insert(tk.END, "\n")
+        self.chat_area.window_create(tk.END, window=card_frame)
+        self.chat_area.insert(tk.END, "\n")
+        
+        self.chat_area.config(state='disabled')
+        self.chat_area.yview(tk.END)
+
+    def show_progress_block(self):
+        """Crée et insère un bloc de progression temporaire et stylisé dans le fil de discussion."""
+        self.chat_area.config(state='normal')
+        
+        # Conteneur principal (Cadre avec bordure cyan)
+        self.progress_frame = tk.Frame(self.chat_area, bg="#1e1e1e", highlightbackground="#03dac6", highlightthickness=1, bd=0, padx=15, pady=10)
+        
+        # Label de statut/progression
+        self.progress_label = tk.Label(
+            self.progress_frame, 
+            text="🎨 Connexion à Stable Diffusion en cours...", 
+            bg="#1e1e1e", 
+            fg="#03dac6", 
+            font=("Arial", 10, "bold")
+        )
+        self.progress_label.pack(side="left")
+        
+        # Insertion en tant que fenêtre en ligne dans la chat_area
+        self.chat_area.insert(tk.END, "\n")
+        self.chat_area.window_create(tk.END, window=self.progress_frame)
+        self.chat_area.insert(tk.END, "\n")
+        
+        self.chat_area.config(state='disabled')
+        self.chat_area.yview(tk.END)
+
+    def update_progress_block(self, text):
+        """Met à jour le texte du bloc de progression de manière thread-safe."""
+        if hasattr(self, 'progress_label') and self.progress_label:
+            self.root.after(0, lambda: self.progress_label.config(text=text))
+
+    def remove_progress_block(self):
+        """Supprime proprement le bloc de progression de l'interface de manière thread-safe."""
+        def safe_destroy():
+            if hasattr(self, 'progress_frame') and self.progress_frame:
+                try:
+                    self.progress_frame.destroy()
+                except Exception:
+                    pass
+                self.progress_frame = None
+                self.progress_label = None
+        self.root.after(0, safe_destroy)
+
+    def _poll_sd_progress_thread(self):
+        """Thread compagnon de polling de progression Stable Diffusion en arrière-plan."""
+        import time
+        print("[SD POLLING] Thread de progression démarré.")
+        dots = ""
+        while hasattr(self, 'sd_generating') and self.sd_generating:
+            try:
+                # Cycle des trois petits points : "." -> ".." -> "..." -> "."
+                dots = "." * ((len(dots) % 3) + 1)
+                
+                progress_data = self.ctrl.image_manager.service.get_generation_progress()
+                progress = progress_data.get("progress", 0.0)
+                eta = progress_data.get("eta", 0.0)
+                
+                # Mise à jour graphique in-place avec animation des points
+                status_text = f"🎨 Génération en cours : {progress}% (Reste env. {eta}s) {dots}"
+                self.update_progress_block(status_text)
+                
+                # Affichage des logs en console pour la validation
+                print(f"[SD POLLING] Progress: {progress}% - ETA: {eta}s {dots}")
+            except Exception as e:
+                print(f"[SD POLLING WARNING] Échec de la récupération : {e}")
+            time.sleep(1.0)
+        print("[SD POLLING] Thread de progression arrêté.")
+
+    def show_error_block(self, title, message):
+        """Affiche un encadré rouge esthétique pour les erreurs critiques dans le chat d'Anna."""
+        self.chat_area.config(state='normal')
+        
+        # Cadre d'erreur rouge profond Material
+        card_frame = tk.Frame(self.chat_area, bg="#1e1e1e", highlightbackground="#cf6679", highlightthickness=1, bd=0, padx=15, pady=12)
+        
+        # En-tête de l'erreur
+        header = tk.Label(card_frame, text=f"❌ {title}", bg="#1e1e1e", fg="#cf6679", font=("Arial", 10, "bold"), anchor="w")
+        header.pack(fill="x", pady=(0, 5))
+        
+        # Message explicatif de l'erreur
+        msg_lbl = tk.Label(card_frame, text=message, bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 9), anchor="w", justify="left", wraplength=450)
+        msg_lbl.pack(fill="x")
+        
+        # Insertion en ligne
         self.chat_area.insert(tk.END, "\n")
         self.chat_area.window_create(tk.END, window=card_frame)
         self.chat_area.insert(tk.END, "\n")

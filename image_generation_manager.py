@@ -139,17 +139,23 @@ class ImageGenerationManager:
 
     def execute_generation(self, params):
         """
-        Déclenche la génération simulée en V0 via le StableDiffusionService.
+        Déclenche la génération réelle via le StableDiffusionService.
         """
         try:
             result = self.service.generate_image(params)
-            return {
-                "type": "image_simulation_result",
-                "content": result,
-                "message": "La simulation de génération d'image est terminée avec succès !"
-            }
+            if result.get("status") == "success":
+                return {
+                    "type": "image_generation_result",
+                    "content": result,
+                    "message": "La génération d'image réelle est terminée avec succès !"
+                }
+            else:
+                return {
+                    "type": "error",
+                    "message": result.get("message", "Une erreur inconnue est survenue lors de la génération.")
+                }
         except Exception as e:
             return {
                 "type": "error",
-                "message": f"Une erreur s'est produite lors de la génération simulée : {e}"
+                "message": f"Une erreur s'est produite lors du déclenchement de la génération : {e}"
             }
