@@ -109,6 +109,70 @@ class AnnaGUI:
         )
         self.model_dropdown.pack(fill="x", padx=15, pady=(0, 10))
 
+        # Cadre pour la génération d'images (Stable Diffusion) - MVC
+        self.sd_frame = tk.Frame(self.left_panel, bg="#1e1e1e", highlightbackground="#333333", highlightthickness=1)
+        self.sd_frame.pack(side="top", fill="x", pady=(15, 0))
+
+        # En-tête avec titre et bouton rouage Setup
+        self.sd_header = tk.Frame(self.sd_frame, bg="#1e1e1e")
+        self.sd_header.pack(fill="x", padx=15, pady=(10, 5))
+
+        self.sd_label = tk.Label(self.sd_header, text="🎨 Stable Diffusion :", bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 10, "bold"))
+        self.sd_label.pack(side="left")
+
+        self.sd_setup_button = tk.Button(
+            self.sd_header, 
+            text="⚙️", 
+            command=self.show_sd_settings_dialog, 
+            bg="#333333", 
+            fg="white", 
+            activebackground="#444444", 
+            activeforeground="white", 
+            relief="flat",
+            bd=0,
+            padx=5
+        )
+        self.sd_setup_button.pack(side="right")
+
+        # Menu déroulant pour le checkpoint
+        self.sd_checkpoint_var = tk.StringVar(self.root)
+        self.sd_checkpoint_var.set("Chargement...")
+
+        self.sd_checkpoint_dropdown = tk.OptionMenu(self.sd_frame, self.sd_checkpoint_var, "Chargement...")
+        self.sd_checkpoint_dropdown.config(
+            bg="#333333", 
+            fg="white", 
+            activebackground="#444444", 
+            activeforeground="white", 
+            relief="flat", 
+            highlightthickness=0
+        )
+        self.sd_checkpoint_dropdown["menu"].config(
+            bg="#333333", 
+            fg="white", 
+            activebackground="#bb86fc", 
+            activeforeground="black", 
+            relief="flat"
+        )
+        self.sd_checkpoint_dropdown.pack(fill="x", padx=15, pady=(0, 10))
+
+        # Bouton principal "Générer une Image"
+        self.sd_generate_button = tk.Button(
+            self.sd_frame, 
+            text="🖼️ Générer une Image", 
+            command=self.toggle_image_generation_mode, 
+            bg="#333333", 
+            fg="white", 
+            activebackground="#444444", 
+            activeforeground="white", 
+            relief="flat",
+            font=("Arial", 10, "bold")
+        )
+        self.sd_generate_button.pack(fill="x", padx=15, pady=(0, 15))
+
+        # Lancement de la détection asynchrone des checkpoints Stable Diffusion
+        threading.Thread(target=self._detect_sd_checkpoints_thread, daemon=True).start()
+
         # Chargement de l'image d'avatar
         self.load_avatar()
 
@@ -381,6 +445,23 @@ Note : Shift + Entrée pour un saut de ligne."""
             res_type = result.get("type")
             assistant_name = self.memory.assistant_profile.get("nom", "Anna")
             
+            # --- INTERCEPTION MODE DE GÉNÉRATION D'IMAGES (TÂCHE 8) ---
+            if res_type == "image_parameters_proposal":
+                self.show_image_proposal_block(result.get("content"), result.get("message"))
+                return
+            elif res_type == "image_simulation_result":
+                self.show_image_simulation_block(result.get("content"))
+                self.sd_generate_button.config(text="🖼️ Générer une Image", bg="#333333", fg="white")
+                return
+            elif res_type == "image_cancelled":
+                self.append_chat("Système", result.get("message"))
+                self.sd_generate_button.config(text="🖼️ Générer une Image", bg="#333333", fg="white")
+                return
+            elif res_type == "image_normal_chat":
+                self.append_chat("Système", result.get("message"))
+                return
+            
+            # --- COMPORTEMENT D'ORIGINE ---
             if res_type == "intent_handled":
                 self.append_chat("Système", result.get("message"))
                 
@@ -539,6 +620,220 @@ Note : Shift + Entrée pour un saut de ligne."""
         # Insertion en tant que fenêtre en ligne dans la chat_area
         self.chat_area.insert(tk.END, "\n")
         self.chat_area.window_create(tk.END, window=diff_frame)
+        self.chat_area.insert(tk.END, "\n")
+        
+        self.chat_area.config(state='disabled')
+        self.chat_area.yview(tk.END)
+
+    def _detect_sd_checkpoints_thread(self):
+        """Détecte de manière asynchrone les checkpoints Stable Diffusion (locaux ou en ligne)."""
+        checkpoints = []
+        try:
+            # 1. On tente d'interroger le service en ligne si disponible
+            if self.ctrl.image_manager.service.is_api_available():
+                checkpoints = self.ctrl.image_manager.service.get_online_checkpoints()
+        except Exception as e:
+            print(f"[GUI WARNING] Échec de l'accès à l'API SD en arrière-plan : {e}")
+            
+        # 2. Si aucun checkpoint trouvé via l'API, on scanne le dossier local via ImageSettingsManager
+        if not checkpoints:
+            try:
+                checkpoints = self.ctrl.image_manager.settings.scan_checkpoints()
+            except Exception as e:
+                print(f"[GUI WARNING] Échec du scan local de checkpoints : {e}")
+                
+        self.root.after(0, lambda: self._update_sd_checkpoint_dropdown(checkpoints))
+
+    def _update_sd_checkpoint_dropdown(self, checkpoints):
+        """Met à jour le widget OptionMenu avec la liste des checkpoints trouvés."""
+        menu = self.sd_checkpoint_dropdown["menu"]
+        menu.delete(0, "end")
+        
+        if not checkpoints:
+            self.sd_checkpoint_var.set("Aucun checkpoint")
+            menu.add_command(label="Aucun checkpoint", state="disabled")
+            return
+            
+        for cp in checkpoints:
+            menu.add_command(label=cp, command=lambda c=cp: self.on_sd_checkpoint_selected(c))
+            
+        # Sélection par défaut : dernière sélectionnée ou première disponible
+        saved_cp = self.ctrl.image_manager.settings.selected_checkpoint
+        if saved_cp and saved_cp in checkpoints:
+            self.sd_checkpoint_var.set(saved_cp)
+        else:
+            first_cp = checkpoints[0]
+            self.sd_checkpoint_var.set(first_cp)
+            self.ctrl.image_manager.settings.set_selected_checkpoint(first_cp)
+
+    def on_sd_checkpoint_selected(self, checkpoint_name):
+        """Callback appelé lors de la sélection d'un checkpoint Stable Diffusion."""
+        self.sd_checkpoint_var.set(checkpoint_name)
+        self.ctrl.image_manager.settings.set_selected_checkpoint(checkpoint_name)
+        print(f"[IMAGE SETTINGS] Checkpoint SD configuré à chaud : {checkpoint_name}")
+
+    def show_sd_settings_dialog(self):
+        """Affiche une boîte de dialogue Tkinter (Toplevel) pour configurer les dossiers Stable Diffusion."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Configuration Stable Diffusion")
+        dialog.geometry("450x320")
+        dialog.configure(bg="#1e1e1e")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # Rendre le dialogue centré par rapport à la fenêtre parente
+        dialog.geometry(f"+{self.root.winfo_x() + 50}+{self.root.winfo_y() + 50}")
+
+        # Labels et Entrées
+        tk.Label(dialog, text="⚙️ CONFIGURATION STABLE DIFFUSION", bg="#1e1e1e", fg="#bb86fc", font=("Arial", 11, "bold")).pack(pady=(15, 15))
+
+        # URL API
+        tk.Label(dialog, text="URL API de Stable Diffusion (ex: http://127.0.0.1:7860) :", bg="#1e1e1e", fg="#e0e0e0", anchor="w").pack(fill="x", padx=20)
+        api_entry = tk.Entry(dialog, bg="#333333", fg="white", insertbackground="white", relief="flat", bd=5)
+        api_entry.pack(fill="x", padx=20, pady=(5, 10))
+        api_entry.insert(0, self.ctrl.image_manager.settings.api_url)
+
+        # Dossier Installation
+        tk.Label(dialog, text="Dossier d'installation Stable Diffusion (optionnel) :", bg="#1e1e1e", fg="#e0e0e0", anchor="w").pack(fill="x", padx=20)
+        install_entry = tk.Entry(dialog, bg="#333333", fg="white", insertbackground="white", relief="flat", bd=5)
+        install_entry.pack(fill="x", padx=20, pady=(5, 10))
+        install_entry.insert(0, self.ctrl.image_manager.settings.install_dir)
+
+        # Dossier Checkpoints
+        tk.Label(dialog, text="Dossier des checkpoints Stable Diffusion (optionnel) :", bg="#1e1e1e", fg="#e0e0e0", anchor="w").pack(fill="x", padx=20)
+        checkpoints_entry = tk.Entry(dialog, bg="#333333", fg="white", insertbackground="white", relief="flat", bd=5)
+        checkpoints_entry.pack(fill="x", padx=20, pady=(5, 10))
+        checkpoints_entry.insert(0, self.ctrl.image_manager.settings.checkpoints_dir)
+
+        # Boutons Sauvegarder et Fermer
+        btn_frame = tk.Frame(dialog, bg="#1e1e1e")
+        btn_frame.pack(fill="x", padx=20, pady=(15, 0))
+
+        def save():
+            self.ctrl.image_manager.settings.set_api_url(api_entry.get())
+            self.ctrl.image_manager.settings.set_install_dir(install_entry.get())
+            self.ctrl.image_manager.settings.set_checkpoints_dir(checkpoints_entry.get())
+            
+            # Recalculer l'affichage dans le formulaire
+            install_entry.delete(0, tk.END)
+            install_entry.insert(0, self.ctrl.image_manager.settings.install_dir)
+            checkpoints_entry.delete(0, tk.END)
+            checkpoints_entry.insert(0, self.ctrl.image_manager.settings.checkpoints_dir)
+            
+            # Relancer le scan des checkpoints dans un thread
+            threading.Thread(target=self._detect_sd_checkpoints_thread, daemon=True).start()
+            
+            messagebox.showinfo("Succès", "Configuration sauvegardée avec succès !", parent=dialog)
+            dialog.destroy()
+
+        save_btn = tk.Button(btn_frame, text="✓ Enregistrer", command=save, bg="#03dac6", fg="black", activebackground="#018786", relief="flat", padx=15, pady=5)
+        save_btn.pack(side="left")
+
+        cancel_btn = tk.Button(btn_frame, text="Annuler", command=dialog.destroy, bg="#444444", fg="white", activebackground="#666666", relief="flat", padx=15, pady=5)
+        cancel_btn.pack(side="right")
+
+    def toggle_image_generation_mode(self):
+        """Bascule le mode de génération d'image de façon conversationnelle (LLM-First)."""
+        # 1. Démarrer la session dans le contrôleur principal (MVC)
+        self.ctrl.start_image_session()
+        
+        # 2. Mettre à jour visuellement le bouton et notifier l'utilisateur dans le chat
+        self.sd_generate_button.config(text="🎨 Mode Image Actif", bg="#bb86fc", fg="black")
+        self.append_chat("Système", "[🎨 MODE IMAGE ACTIVÉ] Décrivez l'image que vous souhaitez générer ci-dessous. (ex: 'Un petit chat astronaute')")
+
+    def show_image_proposal_block(self, proposal, system_message):
+        """Affiche une carte de pré-génération stylisée avec tous les paramètres SD, directement dans le chat."""
+        self.chat_area.config(state='normal')
+        
+        # Cadre principal avec bordure violette
+        card_frame = tk.Frame(self.chat_area, bg="#1e1e1e", highlightbackground="#bb86fc", highlightthickness=1, bd=0, padx=15, pady=12)
+        
+        # En-tête
+        title = tk.Label(card_frame, text="🎨 PROPOSITION DE PARAMÈTRES IMAGE", bg="#1e1e1e", fg="#bb86fc", font=("Arial", 10, "bold"), anchor="w")
+        title.pack(fill="x", pady=(0, 8))
+        
+        # Détails des paramètres
+        details = [
+            ("Description :", proposal.get("description_originale", "")),
+            ("Style détecté :", proposal.get("style", "Non spécifié")),
+            ("Prompt positif :", proposal.get("prompt", "")),
+            ("Prompt négatif :", proposal.get("negative_prompt", "")),
+            ("Dimensions :", f"{proposal.get('width', 512)} x {proposal.get('height', 512)}"),
+            ("Steps :", str(proposal.get("steps", 25))),
+            ("CFG Scale :", str(proposal.get("cfg_scale", 7.5))),
+            ("Sampler :", proposal.get("sampler", "Euler a")),
+            ("Checkpoint :", proposal.get("checkpoint", "Par défaut")),
+            ("Seed :", str(proposal.get("seed", -1)))
+        ]
+        
+        for label, val in details:
+            row = tk.Frame(card_frame, bg="#1e1e1e")
+            row.pack(fill="x", pady=2)
+            lbl = tk.Label(row, text=f"• {label} ", bg="#1e1e1e", fg="#03dac6", font=("Arial", 9, "bold"), anchor="w", width=16)
+            lbl.pack(side="left")
+            val_lbl = tk.Label(row, text=val, bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 9), anchor="w", justify="left", wrap=True)
+            val_lbl.pack(side="left", fill="x", expand=True)
+
+        # Message d'instruction
+        msg_lbl = tk.Label(card_frame, text=f"\n💬 {system_message}", bg="#1e1e1e", fg="#a0a0a0", font=("Arial", 9, "italic"), justify="left", wrap=True)
+        msg_lbl.pack(fill="x", pady=(5, 0))
+        
+        # Insertion dans le chat
+        self.chat_area.insert(tk.END, "\n")
+        self.chat_area.window_create(tk.END, window=card_frame)
+        self.chat_area.insert(tk.END, "\n")
+        
+        self.chat_area.config(state='disabled')
+        self.chat_area.yview(tk.END)
+
+    def show_image_simulation_block(self, result_content):
+        """Affiche une carte de simulation finale de génération d'image, avec un placeholder graphique et canvas."""
+        self.chat_area.config(state='normal')
+        
+        # Cadre principal avec bordure cyan
+        card_frame = tk.Frame(self.chat_area, bg="#1e1e1e", highlightbackground="#03dac6", highlightthickness=1, bd=0, padx=15, pady=12)
+        
+        # En-tête
+        title = tk.Label(card_frame, text="✨ SIMULATION DE GÉNÉRATION D'IMAGE TERMINÉE ✨", bg="#1e1e1e", fg="#03dac6", font=("Arial", 10, "bold"), anchor="w")
+        title.pack(fill="x", pady=(0, 8))
+        
+        # Canvas simulant l'affichage de l'image
+        canvas_width = 300
+        canvas_height = 180
+        canvas = tk.Canvas(card_frame, width=canvas_width, height=canvas_height, bg="#2d2d2d", highlightthickness=1, highlightbackground="#333333")
+        canvas.pack(pady=10)
+        
+        # On dessine un motif stylisé sur le canvas pour simuler le rendu d'une image
+        canvas.create_rectangle(10, 10, canvas_width-10, canvas_height-10, outline="#bb86fc", width=1, dash=(5, 3))
+        canvas.create_text(canvas_width/2, canvas_height/2 - 15, text="[ IMAGE SIMULÉE ]", fill="#03dac6", font=("Arial", 10, "bold"))
+        prompt_preview = result_content["params"].get("prompt", "")
+        if len(prompt_preview) > 35:
+            prompt_preview = prompt_preview[:35] + "..."
+        canvas.create_text(canvas_width/2, canvas_height/2 + 15, text=prompt_preview, fill="#888888", font=("Arial", 8, "italic"), width=250)
+
+        # Récapitulatif
+        details_frame = tk.Frame(card_frame, bg="#1e1e1e")
+        details_frame.pack(fill="x", pady=(5, 0))
+        
+        details = [
+            ("Prompt Final :", result_content["params"].get("prompt", "")),
+            ("Checkpoint :", result_content["params"].get("checkpoint", "")),
+            ("Seed finale :", str(result_content["params"].get("seed", ""))),
+            ("Steps :", str(result_content["params"].get("steps", ""))),
+            ("Statut :", "SIMULATION UNIQUEMENT (V0 - Prête pour la V1 API WebUI)")
+        ]
+        
+        for label, val in details:
+            row = tk.Frame(details_frame, bg="#1e1e1e")
+            row.pack(fill="x", pady=2)
+            lbl = tk.Label(row, text=f"• {label} ", bg="#1e1e1e", fg="#bb86fc", font=("Arial", 9, "bold"), anchor="w", width=15)
+            lbl.pack(side="left")
+            val_lbl = tk.Label(row, text=val, bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 9), anchor="w", justify="left", wrap=True)
+            val_lbl.pack(side="left", fill="x", expand=True)
+            
+        # Insertion dans le chat
+        self.chat_area.insert(tk.END, "\n")
+        self.chat_area.window_create(tk.END, window=card_frame)
         self.chat_area.insert(tk.END, "\n")
         
         self.chat_area.config(state='disabled')

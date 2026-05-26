@@ -6,6 +6,7 @@ from memory_manager import MemoryManager
 from file_manager import FileManager
 from intent_router import IntentRouter
 from code_editor import CodeEditor
+from image_generation_manager import ImageGenerationManager
 
 class AgentController:
     def __init__(self):
@@ -34,6 +35,15 @@ class AgentController:
         self.router.model = saved_model
         
         self.editor = CodeEditor()
+        
+        # 3. Initialisation du gestionnaire de génération d'images (MVC)
+        self.image_manager = ImageGenerationManager(self.engine)
+
+    def start_image_session(self):
+        """
+        Démarre une nouvelle session interactive de génération d'images.
+        """
+        self.image_manager.start_session()
 
     def change_model(self, model_name):
         """
@@ -136,6 +146,10 @@ class AgentController:
         Traite un message utilisateur en langage naturel de manière synchrone.
         Retourne un dictionnaire unifié contenant les résultats IA et système.
         """
+        # 0. Interception sémantique si le mode génération d'images est actif (LLM-First)
+        if hasattr(self, 'image_manager') and self.image_manager.is_active():
+            return self.image_manager.process_user_message(user_input, self.engine)
+
         # 1. Lancement de l'extraction de faits en tâche de fond
         self._trigger_background_memory_task(user_input)
         
