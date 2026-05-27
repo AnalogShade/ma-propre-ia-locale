@@ -56,6 +56,28 @@ class StableDiffusionService:
             print(f"[SD SERVICE WARNING] Échec de la récupération des checkpoints en ligne : {e}")
             return []
 
+    def get_online_samplers(self):
+        """
+        Interroge l'API AUTOMATIC1111 pour récupérer les samplers disponibles.
+        Retourne une liste vide si l'API est inaccessible.
+        """
+        if not self.is_api_available():
+            return []
+            
+        try:
+            url = f"{self.api_url}/sdapi/v1/samplers"
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=2.0) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                samplers = []
+                for sampler in data:
+                    if isinstance(sampler, dict) and 'name' in sampler:
+                        samplers.append(sampler['name'])
+                return samplers
+        except Exception as e:
+            print(f"[SD SERVICE WARNING] Échec de la récupération des samplers en ligne : {e}")
+            return []
+
     def get_generation_progress(self):
         """
         Interroge l'API de progression de Stable Diffusion.

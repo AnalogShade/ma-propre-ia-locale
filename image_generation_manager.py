@@ -57,11 +57,12 @@ class ImageGenerationManager:
         
         if step == "waiting_for_prompt":
             # --- ÉTAPE 1 : L'utilisateur décrit son idée -> Proposition de prompt initiale ---
-            proposal = self.prompt_builder.build_initial_proposal(user_input)
+            samplers = self.service.get_online_samplers()
+            proposal = self.prompt_builder.build_initial_proposal(user_input, available_samplers=samplers)
             
-            # Injection automatique du checkpoint choisi de manière persistante par défaut si le LLM n'en a pas suggéré
+            # Injection systématique du checkpoint sélectionné par l'utilisateur dans l'interface graphique
             selected_cp = self.settings.selected_checkpoint
-            if selected_cp and not proposal.get("checkpoint"):
+            if selected_cp:
                 proposal["checkpoint"] = selected_cp
                 
             self.state["current_params"] = proposal

@@ -14,7 +14,10 @@ Tu dois impérativement respecter les règles suivantes :
    Si aucun format n'est spécifié, utilise par défaut 512x512.
 4. Fournis un "negative_prompt" solide et standardisé (ex: "blurry, low quality, distorted, bad anatomy, deformed, watermark, signature, bad hands").
 5. Suggère le style artistique détecté (ex: "cyberpunk", "watercolor", "photorealistic", "digital art", etc.).
-6. Propose des valeurs par défaut intelligentes : steps = 25, cfg_scale = 7.5, sampler = "Euler a", seed = -1.
+6. Propose des valeurs par défaut intelligentes : steps = 25, cfg_scale = 7.5, seed = -1.
+7. Choisis impérativement le paramètre "sampler" dans la liste des samplers disponibles ci-dessous.
+
+SAMPLERS DISPONIBLES : {samplers_list}
 
 Tu dois répondre UNIQUEMENT avec un objet JSON valide. Ne rajoute aucune explication, aucune phrase d'introduction ou de conclusion.
 
@@ -41,12 +44,16 @@ class ImagePromptBuilder:
         """
         self.engine = ai_engine
 
-    def build_initial_proposal(self, user_description):
+    def build_initial_proposal(self, user_description, available_samplers=None):
         """
         Interroge Ollama pour traduire et enrichir la description de l'utilisateur,
         puis retourne un dictionnaire de paramètres Stable Diffusion structuré.
         """
-        system_prompt = SD_REFORMULATION_PROMPT
+        if not available_samplers:
+            available_samplers = ["Euler a", "Euler", "Heun", "DPM++ 2M Karras", "DPM++ SDE Karras", "DDIM"]
+            
+        samplers_str = ", ".join(available_samplers)
+        system_prompt = SD_REFORMULATION_PROMPT.replace("{samplers_list}", samplers_str)
         user_message = f"Description de l'image : \"{user_description}\""
         
         try:
