@@ -116,9 +116,30 @@ class AgentController:
         elif cmd == '/listfiles':
             return {"handled": True, "action": "list_files", "message": self.files.list_files()}
             
-        elif cmd == '/closefile' and len(parts) > 1:
-            success, response = self.files.close_file(parts[1])
+        elif cmd == '/closefile':
+            target = parts[1] if len(parts) > 1 else None
+            success, response = self.files.close_file(target)
             return {"handled": True, "action": "close_file", "success": success, "message": response}
+            
+        elif cmd == '/closeall':
+            success, response = self.files.close_all_files()
+            return {"handled": True, "action": "close_all", "success": success, "message": response}
+            
+        elif (cmd == '/search' or cmd == '/grep') and len(parts) > 1:
+            query = " ".join(parts[1:]).strip()
+            success, results, truncated = self.files.search_text(query)
+            if not success:
+                return {"handled": True, "action": "search", "success": False, "message": results}
+                
+            if not results:
+                return {"handled": True, "action": "search", "success": True, "message": f"Aucun résultat trouvé pour '{query}'."}
+                
+            msg_lines = [f"Résultats de recherche pour '{query}' :"]
+            for r in results:
+                msg_lines.append(f"- {r['file']}:{r['line_num']}: {r['content']}")
+            if truncated:
+                msg_lines.append("\n[Attention: Résultats tronqués (limite de 5 correspondances par fichier ou 50 correspondances globales atteinte)]")
+            return {"handled": True, "action": "search", "success": True, "message": "\n".join(msg_lines)}
             
         elif cmd == '/reloadfile' and len(parts) > 1:
             success, response = self.files.load_file(parts[1])
@@ -129,8 +150,10 @@ class AgentController:
 /model <nom>       : Changer le modèle Ollama
 /clear             : Effacer l'historique de discussion court terme
 /openfile <chemin> : Charger un fichier texte dans le contexte
-/listfiles         : Voir les fichiers chargés ou disponibles
-/closefile <nom>   : Fermer le fichier actif
+/listfiles         : Voir l'arborescence des fichiers (ouvert/disponible)
+/closefile [nom]   : Fermer le fichier actif ou un fichier spécifique
+/closeall          : Fermer tous les fichiers chargés en contexte
+/search <terme>    : Rechercher du texte (grep) dans les fichiers du projet
 /reloadfile <nom>  : Recharger le fichier modifié
 /help              : Afficher cette aide
 /quit              : Quitter l'application (en mode console)"""
@@ -166,11 +189,10 @@ class AgentController:
                 "system_context": intent_result.get("system_context")
             }
             
-        # 3. Vérification garde-fou : besoin d'un fichier actif pour certaines requêtes
+        # 3. Vérification garde-fou : besoin d'un répertoire de travail actif ou d'un fichier pour certaines requêtes
         keywords_code = ["fichier", "code", "contenu", "analyse", "lis", "vois"]
-        if not self.files.last_file_load_success and any(k in user_input.lower() for k in keywords_code):
-            assistant_name = self.memory.assistant_profile.get("nom", "Anna")
-            msg = f"Aucun fichier n'est chargé. Utilise 'ouvre [fichier]' après avoir défini ton répertoire."
+        if not self.files.working_dir and not self.files.last_file_load_success and any(k in user_input.lower() for k in keywords_code):
+            msg = "Aucun répertoire de travail ni fichier n'est défini. Spécifie d'abord ton dossier (ex: 'Voici mon dossier C:\\Projet')."
             return {
                 "type": "error",
                 "message": msg
