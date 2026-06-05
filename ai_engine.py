@@ -50,7 +50,7 @@ class AIEngine:
             print(f"\n[DEBUG: Impossible de joindre Ollama pour lister les modèles -> {e}]")
             return []
 
-    def get_response(self, context_messages, user_summary="", assistant_summary="", assistant_name=DEFAULT_NAME, files_context="", model_name=None):
+    def get_response(self, context_messages, user_summary="", assistant_summary="", assistant_name=DEFAULT_NAME, files_context="", model_name=None, chunk_callback=None, status_callback=None):
         try:
             # 1. Construction du prompt système
             system_content = self.system_prompt.strip().format(name=assistant_name)
@@ -73,10 +73,81 @@ class AIEngine:
             target_model = model_name if model_name else self.model
             _safe_print(f"\n[DIAGNOSTIC] FULL PAYLOAD TO OLLAMA (Model: {target_model}):\n{messages}\n")
 
-            # 3. Appel Ollama
-            response = ollama.chat(model=target_model, messages=messages)
+            # 3. Appel Ollama (avec support streaming et fallback)
+            if status_callback:
+                status_callback("Envoi au modèle...")
+                
+            response_text = ""
+            if chunk_callback:
+                try:
+                    if status_callback:
+                        status_callback("Réflexion du modèle...")
+                    stream = ollama.chat(model=target_model, messages=messages, stream=True)
+                    
+                    first_chunk = True
+                    sent_think_start = False
+                    sent_think_end = False
+                    
+                    for chunk in stream:
+                        if first_chunk:
+                            if status_callback:
+                                status_callback("Réception de la réponse...")
+                            first_chunk = False
+                        
+                        message = chunk.get('message', {})
+                        thinking_text = message.get('thinking', '')
+                        content_text = message.get('content', '')
+                        
+                        # Si le modèle renvoie du raisonnement natif (ex: Gemma 4)
+                        if thinking_text:
+                            if not sent_think_start:
+                                chunk_callback("<think>")
+                                response_text += "<think>"
+                                sent_think_start = True
+                            chunk_callback(thinking_text)
+                            response_text += thinking_text
+                            
+                        # Si le modèle renvoie du contenu final
+                        if content_text:
+                            if sent_think_start and not sent_think_end:
+                                chunk_callback("</think>")
+                                response_text += "</think>"
+                                sent_think_end = True
+                            chunk_callback(content_text)
+                            response_text += content_text
+                            
+                    # Clôture de sécurité
+                    if sent_think_start and not sent_think_end:
+                        chunk_callback("</think>")
+                        response_text += "</think>"
+                        
+                except Exception as stream_err:
+                    _safe_print(f"\n[DEBUG: Échec du streaming, repli en mode synchrone -> {stream_err}]")
+                    if status_callback:
+                        status_callback("Réflexion du modèle (Repli synchrone)...")
+                    response = ollama.chat(model=target_model, messages=messages)
+                    resp_msg = response.get('message', {})
+                    sync_thinking = resp_msg.get('thinking', '')
+                    sync_content = resp_msg.get('content', '')
+                    if sync_thinking:
+                        response_text = f"<think>{sync_thinking}</think>{sync_content}"
+                    else:
+                        response_text = sync_content
+                    if response_text and chunk_callback:
+                        chunk_callback(response_text)
+            else:
+                if status_callback:
+                    status_callback("Réflexion du modèle...")
+                response = ollama.chat(model=target_model, messages=messages)
+                resp_msg = response.get('message', {})
+                sync_thinking = resp_msg.get('thinking', '')
+                sync_content = resp_msg.get('content', '')
+                if sync_thinking:
+                    response_text = f"<think>{sync_thinking}</think>{sync_content}"
+                else:
+                    response_text = sync_content
             
-            text = response['message']['content'].strip()
+            text = response_text.strip()
             _safe_print(f"\n[DIAGNOSTIC] RAW OLLAMA RESPONSE (Model: {target_model}):\n{text}\n")
             return text if text else None
             

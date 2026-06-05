@@ -164,7 +164,7 @@ class AgentController:
             
         return {"handled": True, "action": "unknown", "message": f"Commande slash inconnue : {cmd}"}
 
-    def process_user_message_sync(self, user_input):
+    def process_user_message_sync(self, user_input, chunk_callback=None, status_callback=None):
         """
         Traite un message utilisateur en langage naturel de manière synchrone.
         Retourne un dictionnaire unifié contenant les résultats IA et système.
@@ -172,6 +172,9 @@ class AgentController:
         # 0. Interception sémantique si le mode génération d'images est actif (LLM-First)
         if hasattr(self, 'image_manager') and self.image_manager.is_active():
             return self.image_manager.process_user_message(user_input, self.engine)
+
+        if status_callback:
+            status_callback("Préparation du contexte...")
 
         # 1. Lancement de l'extraction de faits en tâche de fond
         self._trigger_background_memory_task(user_input)
@@ -212,8 +215,13 @@ class AgentController:
             user_summary=user_summary,
             assistant_summary=assistant_summary,
             assistant_name=assistant_name,
-            files_context=files_context
+            files_context=files_context,
+            chunk_callback=chunk_callback,
+            status_callback=status_callback
         )
+        
+        if status_callback:
+            status_callback("Finalisation...")
         
         if not response:
             user_name = self.memory.user_profile.get("prénom", "Louis")
@@ -224,24 +232,35 @@ class AgentController:
                 "system_notification": intent_result.get("message") if intent_result.get("action") == "load_context" else None
             }
             
-        # Enregistrement de la réponse dans l'historique
-        self.memory.add_message("assistant", response)
+        # Nettoyage des balises de trace <think>...</think> pour l'historique, le TTS et les diffs
+        clean_response = response
+        if "<think>" in response:
+            parts = response.split("<think>", 1)
+            before_think = parts[0]
+            rest = parts[1]
+            if "</think>" in rest:
+                clean_response = before_think + rest.split("</think>", 1)[1]
+            else:
+                clean_response = before_think
+
+        # Enregistrement de la réponse propre dans l'historique
+        self.memory.add_message("assistant", clean_response)
         
-        # Détection d'émotion associée
+        # Détection d'émotion associée sur la réponse propre
         emotion = "neutral"
         try:
             import emotion_manager
-            emotion = emotion_manager.detect_emotion(response)
+            emotion = emotion_manager.detect_emotion(clean_response)
         except Exception as e:
             print(f"[CONTROLLER WARNING] Échec de la détection d'émotion : {e}")
             
-        # Analyse des propositions de modifications de fichiers (diffs)
-        create_blocks = self.editor.parse_create_blocks(response)
-        edit_blocks = self.editor.parse_search_replace_blocks(response)
+        # Analyse des propositions de modifications de fichiers (diffs) sur la réponse propre
+        create_blocks = self.editor.parse_create_blocks(clean_response)
+        edit_blocks = self.editor.parse_search_replace_blocks(clean_response)
         
         return {
             "type": "ai_response",
-            "content": response,
+            "content": clean_response,
             "emotion": emotion,
             "create_blocks": create_blocks,
             "edit_blocks": edit_blocks,

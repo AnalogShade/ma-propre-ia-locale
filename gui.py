@@ -37,6 +37,7 @@ class AnnaGUI:
         self.tts_manager = TTSManager()
         self.msg_counter = 0
         self.current_tts_tag = None
+        self.generating = False
 
         # Zone Gauche : Conteneur invisible pour empiler l'avatar et les contrôles sous-jacents
         self.left_panel = tk.Frame(self.main_container, bg="#121212")
@@ -180,16 +181,56 @@ class AnnaGUI:
         self.right_frame = tk.Frame(self.main_container, bg="#121212")
         self.right_frame.pack(side="right", expand=True, fill="both")
 
-        self.chat_area = scrolledtext.ScrolledText(self.right_frame, wrap=tk.WORD, state='disabled', font=("Arial", 11), bg="#1e1e1e", fg="#e0e0e0", insertbackground="white", bd=0)
-        self.chat_area.pack(expand=True, fill="both", padx=5, pady=5)
+        # Barre d'état en bas de la zone droite
+        self.status_frame = tk.Frame(self.right_frame, bg="#121212")
+        self.status_frame.pack(side="bottom", fill="x", padx=5, pady=(2, 2))
+        self.status_label = tk.Label(self.status_frame, text="Prêt", bg="#121212", fg="#888888", font=("Arial", 9, "italic"), anchor="w")
+        self.status_label.pack(side="left")
+
+        # Conteneur pour loger le chat et la trace côte à côte
+        self.chat_and_trace_container = tk.Frame(self.right_frame, bg="#121212")
+        self.chat_and_trace_container.pack(expand=True, fill="both", padx=5, pady=5)
+
+        self.chat_area = scrolledtext.ScrolledText(self.chat_and_trace_container, wrap=tk.WORD, state='disabled', font=("Arial", 11), bg="#1e1e1e", fg="#e0e0e0", insertbackground="white", bd=0)
+        self.chat_area.pack(side="left", expand=True, fill="both")
+
+        # Panneau latéral de trace (masqué par défaut)
+        self.trace_panel = tk.Frame(self.chat_and_trace_container, bg="#1e1e1e", width=280, highlightbackground="#333333", highlightthickness=1)
+        self.trace_panel.pack_propagate(False)
+        
+        self.trace_title_label = tk.Label(self.trace_panel, text="🔍 Trace du modèle", bg="#1e1e1e", fg="#bb86fc", font=("Arial", 10, "bold"), pady=8)
+        self.trace_title_label.pack(fill="x")
+        
+        self.trace_text_area = scrolledtext.ScrolledText(self.trace_panel, wrap=tk.WORD, state='disabled', font=("Consolas", 9), bg="#121212", fg="#88ff88", insertbackground="white", bd=0)
+        self.trace_text_area.pack(expand=True, fill="both", padx=5, pady=5)
+        
+        # Texte de trace par défaut
+        self.trace_text_area.config(state='normal')
+        self.trace_text_area.insert(tk.END, "Aucun contenu de trace disponible.")
+        self.trace_text_area.config(state='disabled')
+        
+        self.trace_visible = False
 
         # Zone de saisie (tk.Text pour permettre le multi-ligne)
         self.input_frame = tk.Frame(self.right_frame, bg="#121212")
         self.input_frame.pack(fill="x", padx=5, pady=5)
 
-        # On place d'abord les boutons \u00e0 droite pour qu'ils soient prioritaires
+        # Boutons à droite
         self.help_button = tk.Button(self.input_frame, text=" ? ", command=self.show_help, bg="#444444", fg="white", activebackground="#666666", activeforeground="white", relief="flat", padx=10)
         self.help_button.pack(side="right", fill="y", padx=(5, 0))
+
+        self.trace_toggle_btn = tk.Button(
+            self.input_frame, 
+            text="🔍 Trace", 
+            command=self.toggle_trace_panel, 
+            bg="#333333", 
+            fg="white", 
+            activebackground="#444444", 
+            activeforeground="white", 
+            relief="flat", 
+            padx=10
+        )
+        self.trace_toggle_btn.pack(side="right", fill="y", padx=(5, 0))
 
         self.send_button = tk.Button(self.input_frame, text="Envoyer", command=self.send_message, bg="#333333", fg="white", activebackground="#444444", activeforeground="white", relief="flat", padx=15)
         self.send_button.pack(side="right", fill="y", padx=(5, 0))
@@ -343,6 +384,124 @@ class AnnaGUI:
         """Met à jour l'avatar de manière sécurisée (thread-safe si appelé via after)."""
         self.load_avatar(emotion)
 
+    def toggle_trace_panel(self):
+        if self.trace_visible:
+            self.trace_panel.pack_forget()
+            self.trace_visible = False
+            self.trace_toggle_btn.config(bg="#333333", fg="white")
+        else:
+            # Réorganiser le packing pour donner la priorité de dimension au panneau de trace
+            self.chat_area.pack_forget()
+            self.trace_panel.pack(side="right", fill="both", padx=(5, 0))
+            self.chat_area.pack(side="left", expand=True, fill="both")
+            self.trace_visible = True
+            self.trace_toggle_btn.config(bg="#bb86fc", fg="black")
+
+    def update_trace_content(self, text):
+        try:
+            self.trace_text_area.config(state='normal')
+            self.trace_text_area.delete("1.0", tk.END)
+            if not text or not text.strip():
+                self.trace_text_area.insert(tk.END, "Aucun contenu de trace disponible.")
+            else:
+                self.trace_text_area.insert(tk.END, text)
+            self.trace_text_area.config(state='disabled')
+            self.trace_text_area.yview(tk.END)
+        except Exception:
+            pass
+
+    def update_status(self, text, active=True):
+        try:
+            if active:
+                self.status_label.config(text=text, fg="#03dac6")
+            else:
+                self.status_label.config(text=text, fg="#888888")
+        except Exception:
+            pass
+
+    def split_response(self, accumulated_text):
+        # Sépare la trace de raisonnement <think>...</think> de la réponse finale propre
+        if "<think>" in accumulated_text:
+            parts = accumulated_text.split("<think>", 1)
+            before_think = parts[0]
+            rest = parts[1]
+            if "</think>" in rest:
+                think_parts = rest.split("</think>", 1)
+                thinking_text = think_parts[0]
+                final_text = before_think + think_parts[1]
+            else:
+                thinking_text = rest
+                final_text = before_think
+            return thinking_text, final_text
+        else:
+            return "", accumulated_text
+
+    def start_streaming_response(self, sender):
+        try:
+            self.chat_area.config(state='normal')
+            assistant_name = self.memory.assistant_profile.get("nom", "Anna")
+            if sender == assistant_name:
+                self.current_streaming_tag = f"tts_tag_{self.msg_counter}"
+                self.msg_counter += 1
+                self.chat_area.insert(tk.END, f"\n{sender} : ", ("bold", "clickable_name", self.current_streaming_tag))
+            else:
+                self.current_streaming_tag = None
+                self.chat_area.insert(tk.END, f"\n{sender} : ", "bold")
+            self.chat_area.config(state='disabled')
+            self.chat_area.yview(tk.END)
+            self.is_streamed = True
+            self.accumulated_response = ""
+            self.printed_final_text_len = 0
+        except Exception:
+            pass
+
+    def append_streaming_chunk(self, text):
+        try:
+            self.chat_area.config(state='normal')
+            self.chat_area.insert(tk.END, text)
+            self.chat_area.config(state='disabled')
+            self.chat_area.yview(tk.END)
+        except Exception:
+            pass
+
+    def finalize_streaming_response(self, full_text):
+        try:
+            self.chat_area.config(state='normal')
+            self.chat_area.insert(tk.END, "\n")
+            self.chat_area.config(state='disabled')
+            self.chat_area.yview(tk.END)
+            
+            self.chat_area.tag_config("bold", font=("Arial", 11, "bold"), foreground="#bb86fc")
+            self.chat_area.tag_config("clickable_name", foreground="#03dac6", underline=True)
+            
+            if self.current_streaming_tag:
+                self.chat_area.tag_bind(
+                    self.current_streaming_tag,
+                    "<Button-1>",
+                    lambda e, msg=full_text, tid=self.current_streaming_tag: self.play_tts(msg, tid)
+                )
+        except Exception:
+            pass
+
+    def handle_stream_chunk(self, chunk):
+        self.accumulated_response += chunk
+        
+        # Buffering pour intercepter la balise <think> naissante au tout début du flux
+        stripped = self.accumulated_response.lstrip()
+        if len(stripped) < 7 and "<think>".startswith(stripped):
+            # En cours de détection de la balise <think> au démarrage
+            return
+            
+        thinking_text, final_text = self.split_response(self.accumulated_response)
+        
+        if thinking_text:
+            self.update_trace_content(thinking_text)
+            
+        new_chars = final_text[self.printed_final_text_len:]
+        if new_chars:
+            self.append_streaming_chunk(new_chars)
+            self.printed_final_text_len += len(new_chars)
+
     def append_chat(self, sender, message):
         self.chat_area.config(state='normal')
         
@@ -409,7 +568,24 @@ Note : Shift + Entrée pour un saut de ligne."""
             
         return False
 
+    def set_input_state(self, enabled=True):
+        def do_update():
+            try:
+                state = "normal" if enabled else "disabled"
+                self.user_input.config(state=state)
+                self.send_button.config(state=state)
+                if enabled:
+                    self.send_button.config(bg="#333333", fg="white")
+                else:
+                    self.send_button.config(bg="#222222", fg="#666666")
+            except Exception:
+                pass
+        self.root.after(0, do_update)
+
     def send_message(self):
+        if self.generating:
+            return
+
         msg = self.user_input.get("1.0", tk.END).strip()
         if not msg:
             return
@@ -438,16 +614,48 @@ Note : Shift + Entrée pour un saut de ligne."""
             self.show_progress_block()
             threading.Thread(target=self._poll_sd_progress_thread, daemon=True).start()
 
+        # Marquer la génération comme active et désactiver la saisie
+        self.generating = True
+        self.set_input_state(False)
+
         # Lancer le traitement dans un thread pour ne pas geler l'interface
         threading.Thread(target=self.process_ai_response, args=(msg,), daemon=True).start()
 
     def process_ai_response(self, user_input):
         print(f"\n[DIAGNOSTIC] RAW USER MESSAGE:\n{user_input}\n")
         
-        # Délégation de tout le traitement métier (Intentions, IA, émotions, diffs) au contrôleur unifié
-        result = self.ctrl.process_user_message_sync(user_input)
+        self.is_streamed = False
+        self.accumulated_response = ""
+        self.printed_final_text_len = 0
+        
+        # Effacer l'ancien texte de trace et afficher un message d'attente
+        self.root.after(0, lambda: self.update_trace_content("Aucun contenu de trace disponible."))
+        self.root.after(0, lambda: self.update_status("Préparation du contexte...", active=True))
+        
+        assistant_name = self.memory.assistant_profile.get("nom", "Anna")
+        
+        # Callbacks thread-safe via lambda/root.after
+        def chunk_callback(chunk):
+            def handle_chunk():
+                if not self.is_streamed:
+                    self.start_streaming_response(assistant_name)
+                self.handle_stream_chunk(chunk)
+            self.root.after(0, handle_chunk)
+            
+        def status_callback(status_text):
+            self.root.after(0, lambda: self.update_status(status_text, active=True))
+
+        result = self.ctrl.process_user_message_sync(
+            user_input, 
+            chunk_callback=chunk_callback,
+            status_callback=status_callback
+        )
         
         def display_response_and_diffs():
+            self.generating = False
+            self.set_input_state(True)
+            self.update_status("Prêt", active=False)
+            
             # Arrêt propre du thread de progression et retrait du bloc temporaire
             self.sd_generating = False
             self.remove_progress_block()
@@ -480,28 +688,28 @@ Note : Shift + Entrée pour un saut de ligne."""
                 self.append_chat("Système", result.get("message"))
                 
             elif res_type == "error":
-                # Réinitialisation sécurisée de l'interface en cas de crash durant le mode image
                 if self.ctrl.image_manager.is_active() or self.sd_generate_button.cget("text") == "🎨 Mode Image Actif":
                     self.sd_generate_button.config(text="🖼️ Générer une Image", bg="#333333", fg="white")
                     self.ctrl.image_manager.cancel_session()
                 
-                # Rendu graphique sous forme d'un magnifique encadré rouge
                 self.show_error_block("ÉCHEC DE LA GÉNÉRATION", result.get("message"))
                 return
                 
             elif res_type == "ai_response" or res_type == "text":
-                # Affichage sémantique du chargement de fichier
                 if result.get("system_notification"):
                     self.append_chat("Système", result.get("system_notification"))
                     
                 response = result.get("content")
-                self.append_chat(assistant_name, response)
                 
-                # Mise à jour émotionnelle de l'avatar
+                # Si streaming actif, finaliser la mise en forme du chat, sinon append synchrone classique
+                if self.is_streamed:
+                    self.finalize_streaming_response(response)
+                else:
+                    self.append_chat(assistant_name, response)
+                
                 emotion = result.get("emotion", "neutral")
                 self.update_avatar(emotion)
                 
-                # Parsing et rendu visuel interactif des diffs
                 create_blocks = result.get("create_blocks", [])
                 edit_blocks = result.get("edit_blocks", [])
                 
