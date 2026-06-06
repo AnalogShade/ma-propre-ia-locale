@@ -1,5 +1,8 @@
 import threading
-from config import SETTINGS_FILE, DEFAULT_MODEL_NAME
+from config import (
+    SETTINGS_FILE, DEFAULT_MODEL_NAME, 
+    SELECTIVE_MEMORY_OBSERVATION, ENABLE_SELECTIVE_MEMORY
+)
 from settings_manager import SettingsManager
 from ai_engine import AIEngine
 from memory_manager import MemoryManager
@@ -7,6 +10,7 @@ from file_manager import FileManager
 from intent_router import IntentRouter
 from code_editor import CodeEditor
 from image_generation_manager import ImageGenerationManager
+from memory_retriever import MemoryRetriever
 
 class AgentController:
     def __init__(self):
@@ -35,6 +39,7 @@ class AgentController:
         self.router.model = saved_model
         
         self.editor = CodeEditor()
+        self.retriever = MemoryRetriever()
         
         # 3. Initialisation du gestionnaire de génération d'images (MVC)
         self.image_manager = ImageGenerationManager(self.engine)
@@ -201,9 +206,60 @@ class AgentController:
                 "message": msg
             }
             
+        # Récupération sélective de la mémoire (mode observation)
+        memory_sources = {
+            "user_profile": self.memory.user_profile,
+            "assistant_profile": self.memory.assistant_profile,
+            "facts": self.memory.facts
+        }
+        retrieved = self.retriever.retrieve(user_input, memory_sources)
+        
+        if SELECTIVE_MEMORY_OBSERVATION:
+            from config import CORE_MEMORY_IDS
+            dynamic_selected_count = len([f for f in retrieved.injected_facts if f["id"] not in CORE_MEMORY_IDS])
+            print("\n[DEBUG MEMORY RETRIEVER]")
+            print(f"- Mots-clés détectés : {', '.join(retrieved.keywords_detected) if retrieved.keywords_detected else 'Aucun'}")
+            print(f"- Faits sélectionnés : {dynamic_selected_count}")
+            print(f"- Faits ignorés : {retrieved.ignored_count}")
+            print("- Faits retenus :")
+            if retrieved.debug_details:
+                for item in retrieved.debug_details:
+                    print(f"  - {item['id']} | score {item['score']} | raison : {', '.join(item['reasons'])}")
+            else:
+                print("  - Aucun")
+            print()
+
         # 4. Appel de l'IA principal
-        user_summary = self.memory.get_user_info_summary()
-        assistant_summary = self.memory.get_assistant_info_summary()
+        if ENABLE_SELECTIVE_MEMORY:
+            # Construire des résumés à partir des fiches sélectionnées par le retriever
+            user_facts = [f for f in retrieved.injected_facts if f["category"] in ("user_profile", "long_term_facts")]
+            if user_facts:
+                user_summary = "\n--- CE QUE TU SAIS SUR L'HUMAIN (Louis) ---\n"
+                profile_facts = [f for f in user_facts if f["category"] == "user_profile"]
+                long_facts = [f for f in user_facts if f["category"] == "long_term_facts"]
+                for f in profile_facts:
+                    user_summary += f"- {f['text']}\n"
+                if long_facts:
+                    user_summary += "\nFaits marquants et préférences :\n"
+                    for f in long_facts:
+                        user_summary += f"- {f['text']}\n"
+                user_summary += "--- FIN DES CONNAISSANCES ---\n"
+            else:
+                user_summary = ""
+                
+            assistant_facts = [f for f in retrieved.injected_facts if f["category"] == "assistant_profile"]
+            if assistant_facts:
+                assistant_summary = "\n--- TON IDENTITÉ ET TES TRAITS ---\n"
+                for f in assistant_facts:
+                    assistant_summary += f"- {f['text']}\n"
+                assistant_summary += "--- FIN DE TON IDENTITÉ ---\n"
+            else:
+                assistant_summary = ""
+        else:
+            # Comportement d'origine préservé
+            user_summary = self.memory.get_user_info_summary()
+            assistant_summary = self.memory.get_assistant_info_summary()
+
         files_context = self.files.get_context_for_ai()
         assistant_name = self.memory.assistant_profile.get("nom", "Anna")
         

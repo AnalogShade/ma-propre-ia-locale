@@ -89,3 +89,51 @@ ASSISTANT_PROFILE_FILE = "data/assistant_profile.json"
 SETTINGS_FILE = "data/settings.json"
 FACTS_FILE = "data/long_term_facts.json"
 CONTEXT_WINDOW = 20
+
+# --- PARAMÈTRES DE LA MÉMOIRE SÉLECTIVE ---
+ENABLE_SELECTIVE_MEMORY = True
+SELECTIVE_MEMORY_OBSERVATION = True
+MAX_RETRIEVED_FACTS = 5
+MIN_MEMORY_SCORE = 2
+
+CORE_MEMORY_IDS = [
+    "user_profile_nom",
+    "user_profile_prénom",
+    "assistant_profile_nom",
+    "assistant_profile_cheveux",
+    "assistant_profile_couleur_cheveux"
+]
+
+def log_diagnostic(text):
+    import os
+    import json
+    
+    # 1. Toujours écrire dans le fichier diagnostic.log
+    try:
+        os.makedirs("data", exist_ok=True)
+        with open("data/diagnostic.log", "a", encoding="utf-8") as f:
+            f.write(text + "\n")
+    except Exception:
+        pass
+        
+    # 2. Vérifier si l'affichage sur la console est activé (par défaut: False)
+    show_on_console = False
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+                show_on_console = settings.get("enable_console_diagnostics", False)
+    except Exception:
+        pass
+        
+    if show_on_console:
+        try:
+            print(text)
+        except Exception:
+            try:
+                import sys
+                encoding = sys.stdout.encoding or 'utf-8'
+                print(text.encode(encoding, errors='replace').decode(encoding))
+            except Exception:
+                pass
+
