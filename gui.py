@@ -234,6 +234,9 @@ class AnnaGUI:
         
         self.trace_visible = False
 
+        # Conteneur pour afficher les miniatures des pièces jointes (non packé par défaut)
+        self.attachments_frame = tk.Frame(self.right_frame, bg="#121212")
+
         # Zone de saisie (tk.Text pour permettre le multi-ligne)
         self.input_frame = tk.Frame(self.right_frame, bg="#121212")
         self.input_frame.pack(fill="x", padx=5, pady=5)
@@ -278,8 +281,11 @@ class AnnaGUI:
         self.user_input.pack(side="left", expand=True, fill="x")
         
         # Bindings
+        self.attachments = []
         self.user_input.bind("<Return>", self.handle_return)
         self.user_input.bind("<Shift-Return>", self.handle_shift_return)
+        self.user_input.bind("<Control-v>", self.handle_paste)
+        self.user_input.bind("<Control-V>", self.handle_paste)
 
         # Message de bienvenue
         self.append_chat("Système", "Bienvenue ! Anna est prête. Clique sur le bouton '?' ou tape /help pour l'aide.")
@@ -547,6 +553,32 @@ class AnnaGUI:
         self.chat_area.tag_config("bold", font=("Arial", 11, "bold"), foreground="#bb86fc") # Une touche de violet pour les noms
         self.chat_area.tag_config("clickable_name", foreground="#03dac6", underline=True)
 
+    def append_chat_image(self, image_to_show):
+        """Affiche une miniature de l'image insérée dans le fil de discussion."""
+        self.chat_area.config(state='normal')
+        try:
+            # Créer une copie et redimensionner pour l'affichage dans le chat
+            img = image_to_show.copy()
+            img.thumbnail((200, 200), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            
+            # Conserver une référence dans l'objet chat_area pour empêcher le garbage collection
+            if not hasattr(self, 'chat_photos'):
+                self.chat_photos = []
+            self.chat_photos.append(photo)
+            
+            # Label pour afficher l'image
+            img_lbl = tk.Label(self.chat_area, image=photo, bg="#1e1e1e", highlightthickness=1, highlightbackground="#333333")
+            
+            # Insérer une nouvelle ligne et le label
+            self.chat_area.insert(tk.END, "\n")
+            self.chat_area.window_create(tk.END, window=img_lbl)
+            self.chat_area.insert(tk.END, "\n")
+        except Exception as e:
+            print(f"[GUI ERROR] Impossible d'afficher l'image dans le chat : {e}")
+        self.chat_area.config(state='disabled')
+        self.chat_area.yview(tk.END)
+
     def handle_return(self, event):
         """Envoie le message sur Entrée simple."""
         self.send_message()
@@ -555,6 +587,119 @@ class AnnaGUI:
     def handle_shift_return(self, event):
         """Laisse faire le saut de ligne sur Shift+Entrée."""
         pass
+
+    def handle_paste(self, event=None):
+        # 1. Grab image from clipboard
+        try:
+            from PIL import ImageGrab
+            data = ImageGrab.grabclipboard()
+        except Exception as e:
+            print(f"[GUI WARNING] Échec de la récupération du presse-papiers : {e}")
+            return None
+
+        # 2. Check if we actually have image data or file paths containing images
+        image_to_attach = None
+        file_path = None
+        
+        if data is None:
+            return None # Pas d'image, laisser faire le coller de texte par défaut
+            
+        if isinstance(data, list):
+            # C'est une liste de fichiers copiés (Windows Explorer)
+            valid_exts = ('.png', '.jpg', '.jpeg', '.bmp', '.webp', '.gif')
+            for path in data:
+                if isinstance(path, str) and path.lower().endswith(valid_exts):
+                    try:
+                        from PIL import Image
+                        image_to_attach = Image.open(path)
+                        file_path = path
+                        break
+                    except Exception:
+                        pass
+        elif hasattr(data, 'verify') or hasattr(data, 'save'):
+            # C'est une image PIL directe
+            image_to_attach = data
+            
+        if not image_to_attach:
+            return None # Pas d'image valide, laisser faire le coller par défaut
+            
+        # 3. On a bien une image ! Maintenant, vérifions la compatibilité du modèle
+        active_model = self.ctrl.engine.model
+        if not self.ctrl.engine.does_model_support_vision(active_model):
+            # Avertir l'utilisateur de manière non bloquante
+            self.update_status("Erreur : Le modèle actif ne supporte pas la vision.", active=True)
+            self.append_chat("Système", f"⚠️ Le modèle sélectionné ({active_model}) ne supporte pas les images. Veuillez basculer vers gemma4 ou un autre modèle vision.")
+            return "break" # Intercepter pour empêcher Tkinter de coller des débris textuels
+            
+        # 4. Le modèle est compatible, on ajoute la pièce jointe
+        self.add_attachment(image_to_attach, file_path)
+        return "break"
+
+    def add_attachment(self, pil_image, file_path=None):
+        from attachments import ImageAttachment
+        attachment = ImageAttachment(pil_image, file_path)
+        self.attachments.append(attachment)
+        print(f"[GUI] Pièce jointe ajoutée : {attachment.get_display_name()}")
+        self.update_attachments_ui()
+
+    def update_attachments_ui(self):
+        # Supprimer tous les widgets existants dans la zone des miniatures
+        for widget in self.attachments_frame.winfo_children():
+            widget.destroy()
+            
+        if not self.attachments:
+            self.attachments_frame.pack_forget()
+            return
+            
+        # Afficher le cadre au-dessus de la saisie
+        self.attachments_frame.pack(before=self.input_frame, fill="x", padx=5, pady=(0, 5))
+        
+        # Conserver les références d'images Tkinter pour empêcher le garbage collection
+        self.attachment_photos = []
+        
+        for idx, att in enumerate(self.attachments):
+            if att.get_type() == "image":
+                thumb_frame = tk.Frame(self.attachments_frame, bg="#1e1e1e", highlightbackground="#333333", highlightthickness=1)
+                thumb_frame.pack(side="left", padx=5, pady=2)
+                
+                try:
+                    img_copy = att.image.copy()
+                    img_copy.thumbnail((60, 60), Image.Resampling.LANCZOS)
+                    photo = ImageTk.PhotoImage(img_copy)
+                    self.attachment_photos.append(photo)
+                    
+                    img_label = tk.Label(thumb_frame, image=photo, bg="#1e1e1e")
+                    img_label.pack(side="left", padx=(5, 2), pady=5)
+                except Exception as e:
+                    print(f"[GUI ERROR] Miniature échouée : {e}")
+                    err_lbl = tk.Label(thumb_frame, text="[IMG]", bg="#1e1e1e", fg="white")
+                    err_lbl.pack(side="left", padx=(5, 2), pady=5)
+                
+                disp_name = att.get_display_name()
+                if len(disp_name) > 15:
+                    disp_name = disp_name[:12] + "..."
+                name_lbl = tk.Label(thumb_frame, text=disp_name, bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 9))
+                name_lbl.pack(side="left", padx=2, pady=5)
+                
+                btn_remove = tk.Button(
+                    thumb_frame, 
+                    text="❌", 
+                    command=lambda a=att: self.remove_attachment(a),
+                    bg="#1e1e1e", 
+                    fg="#cf6679", 
+                    activebackground="#333333", 
+                    activeforeground="#cf6679",
+                    relief="flat", 
+                    bd=0,
+                    cursor="hand2"
+                )
+                btn_remove.pack(side="left", padx=(2, 5), pady=5)
+
+    def remove_attachment(self, attachment):
+        if attachment in self.attachments:
+            self.attachments.remove(attachment)
+            attachment.clean()
+            self.update_attachments_ui()
 
     def show_help(self):
         """Affiche la liste des commandes disponibles."""
@@ -610,13 +755,32 @@ Note : Shift + Entrée pour un saut de ligne."""
             return
 
         msg = self.user_input.get("1.0", tk.END).strip()
-        if not msg:
+        if not msg and not self.attachments:
             return
 
         self.user_input.delete("1.0", tk.END)
         
         # Affichage immédiat du message de l'utilisateur pour un ordre naturel
-        self.append_chat("Vous", msg)
+        if msg:
+            self.append_chat("Vous", msg)
+        else:
+            self.append_chat("Vous", "[Image jointe]")
+
+        # Préparer et afficher les images dans la zone de chat
+        image_paths = []
+        attachments_to_clean = list(self.attachments)
+        
+        for att in self.attachments:
+            if att.get_type() == "image":
+                # Afficher dans le chat
+                self.append_chat_image(att.image)
+                # Sauvegarder dans data/attachments/ pour l'API Ollama
+                path = att.prepare_for_api("data/attachments")
+                image_paths.append(path)
+                
+        # Vider la barre de miniatures de l'interface immédiatement
+        self.attachments = []
+        self.update_attachments_ui()
 
         # Gestion des commandes spéciales (Fichiers)
         if msg.startswith('/'):
@@ -642,9 +806,9 @@ Note : Shift + Entrée pour un saut de ligne."""
         self.set_input_state(False)
 
         # Lancer le traitement dans un thread pour ne pas geler l'interface
-        threading.Thread(target=self.process_ai_response, args=(msg,), daemon=True).start()
+        threading.Thread(target=self.process_ai_response, args=(msg, image_paths, attachments_to_clean), daemon=True).start()
 
-    def process_ai_response(self, user_input):
+    def process_ai_response(self, user_input, images=None, attachments_to_clean=None):
         print(f"\n[DIAGNOSTIC] RAW USER MESSAGE:\n{user_input}\n")
         
         self.is_streamed = False
@@ -668,80 +832,94 @@ Note : Shift + Entrée pour un saut de ligne."""
         def status_callback(status_text):
             self.root.after(0, lambda: self.update_status(status_text, active=True))
 
-        result = self.ctrl.process_user_message_sync(
-            user_input, 
-            chunk_callback=chunk_callback,
-            status_callback=status_callback
-        )
-        
-        def display_response_and_diffs():
-            self.generating = False
-            self.set_input_state(True)
-            self.update_status("Prêt", active=False)
+        try:
+            result = self.ctrl.process_user_message_sync(
+                user_input, 
+                images=images,
+                chunk_callback=chunk_callback,
+                status_callback=status_callback
+            )
             
-            # Arrêt propre du thread de progression et retrait du bloc temporaire
-            self.sd_generating = False
-            self.remove_progress_block()
-            
-            res_type = result.get("type")
-            assistant_name = self.memory.assistant_profile.get("nom", "Anna")
-            
-            # --- INTERCEPTION MODE DE GÉNÉRATION D'IMAGES (TÂCHE 8) ---
-            if res_type == "image_parameters_proposal":
-                self.show_image_proposal_block(result.get("content"), result.get("message"))
-                return
-            elif res_type == "image_simulation_result":
-                self.show_image_simulation_block(result.get("content"))
-                self.sd_generate_button.config(text="🖼️ Générer une Image", bg="#333333", fg="white")
-                return
-            elif res_type == "image_generation_result":
-                self.show_real_image_block(result.get("content"))
-                self.sd_generate_button.config(text="🖼️ Générer une Image", bg="#333333", fg="white")
-                return
-            elif res_type == "image_cancelled":
-                self.append_chat("Système", result.get("message"))
-                self.sd_generate_button.config(text="🖼️ Générer une Image", bg="#333333", fg="white")
-                return
-            elif res_type == "image_normal_chat":
-                self.append_chat("Système", result.get("message"))
-                return
-            
-            # --- COMPORTEMENT D'ORIGINE ---
-            if res_type == "intent_handled":
-                self.append_chat("Système", result.get("message"))
+            def display_response_and_diffs():
+                self.generating = False
+                self.set_input_state(True)
+                self.update_status("Prêt", active=False)
                 
-            elif res_type == "error":
-                if self.ctrl.image_manager.is_active() or self.sd_generate_button.cget("text") == "🎨 Mode Image Actif":
+                # Arrêt propre du thread de progression et retrait du bloc temporaire
+                self.sd_generating = False
+                self.remove_progress_block()
+                
+                res_type = result.get("type")
+                assistant_name = self.memory.assistant_profile.get("nom", "Anna")
+                
+                # --- INTERCEPTION MODE DE GÉNÉRATION D'IMAGES (TÂCHE 8) ---
+                if res_type == "image_parameters_proposal":
+                    self.show_image_proposal_block(result.get("content"), result.get("message"))
+                    return
+                elif res_type == "image_simulation_result":
+                    self.show_image_simulation_block(result.get("content"))
                     self.sd_generate_button.config(text="🖼️ Générer une Image", bg="#333333", fg="white")
-                    self.ctrl.image_manager.cancel_session()
+                    return
+                elif res_type == "image_generation_result":
+                    self.show_real_image_block(result.get("content"))
+                    self.sd_generate_button.config(text="🖼️ Générer une Image", bg="#333333", fg="white")
+                    return
+                elif res_type == "image_cancelled":
+                    self.append_chat("Système", result.get("message"))
+                    self.sd_generate_button.config(text="🖼️ Générer une Image", bg="#333333", fg="white")
+                    return
+                elif res_type == "image_normal_chat":
+                    self.append_chat("Système", result.get("message"))
+                    return
                 
-                self.show_error_block("ÉCHEC DE LA GÉNÉRATION", result.get("message"))
-                return
-                
-            elif res_type == "ai_response" or res_type == "text":
-                if result.get("system_notification"):
-                    self.append_chat("Système", result.get("system_notification"))
+                # --- COMPORTEMENT D'ORIGINE ---
+                if res_type == "intent_handled":
+                    self.append_chat("Système", result.get("message"))
                     
-                response = result.get("content")
-                
-                # Si streaming actif, finaliser la mise en forme du chat, sinon append synchrone classique
-                if self.is_streamed:
-                    self.finalize_streaming_response(response)
-                else:
-                    self.append_chat(assistant_name, response)
-                
-                emotion = result.get("emotion", "neutral")
-                self.update_avatar(emotion)
-                
-                create_blocks = result.get("create_blocks", [])
-                edit_blocks = result.get("edit_blocks", [])
-                
-                for block in create_blocks:
-                    self.show_diff_block(block['file_path'], "create", create_content=block['content'])
-                for block in edit_blocks:
-                    self.show_diff_block(block['file_path'], "edit", search_content=block['search_content'], replace_content=block['replace_content'])
+                elif res_type == "error":
+                    if self.ctrl.image_manager.is_active() or self.sd_generate_button.cget("text") == "🎨 Mode Image Actif":
+                        self.sd_generate_button.config(text="🖼️ Générer une Image", bg="#333333", fg="white")
+                        self.ctrl.image_manager.cancel_session()
                     
-        self.root.after(0, display_response_and_diffs)
+                    self.show_error_block("ÉCHEC DE LA GÉNÉRATION", result.get("message"))
+                    return
+                    
+                elif res_type == "ai_response" or res_type == "text":
+                    if result.get("system_notification"):
+                        self.append_chat("Système", result.get("system_notification"))
+                        
+                    response = result.get("content")
+                    
+                    # Si streaming actif, finaliser la mise en forme du chat, sinon append synchrone classique
+                    if self.is_streamed:
+                        self.finalize_streaming_response(response)
+                    else:
+                        self.append_chat(assistant_name, response)
+                    
+                    emotion = result.get("emotion", "neutral")
+                    self.update_avatar(emotion)
+                    
+                    create_blocks = result.get("create_blocks", [])
+                    edit_blocks = result.get("edit_blocks", [])
+                    
+                    for block in create_blocks:
+                        self.show_diff_block(block['file_path'], "create", create_content=block['content'])
+                    for block in edit_blocks:
+                        self.show_diff_block(block['file_path'], "edit", search_content=block['search_content'], replace_content=block['replace_content'])
+                        
+            self.root.after(0, display_response_and_diffs)
+        except Exception as e:
+            print(f"[GUI ERROR] Crash dans le traitement de l'IA : {e}")
+            self.root.after(0, lambda: self.show_error_block("ERREUR INTERNE", f"Une erreur s'est produite lors du traitement : {e}"))
+            self.root.after(0, lambda: self.set_input_state(True))
+            self.root.after(0, lambda: self.update_status("Prêt", active=False))
+        finally:
+            if attachments_to_clean:
+                for att in attachments_to_clean:
+                    try:
+                        att.clean()
+                    except Exception as clean_err:
+                        print(f"[GUI WARNING] Échec nettoyage pièce jointe : {clean_err}")
 
     def _detect_models_thread(self):
         """Thread d'arrière-plan pour détecter les modèles Ollama installés."""

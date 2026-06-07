@@ -17,6 +17,32 @@ class AIEngine:
         self.model = MODEL_NAME
         self.system_prompt = SYSTEM_PROMPT
 
+    def does_model_support_vision(self, model_name=None):
+        """
+        Vérifie si le modèle supporte les capacités de vision.
+        Interroge Ollama localement ou utilise un repli sémantique si hors ligne.
+        """
+        if not model_name:
+            model_name = self.model
+        try:
+            info = ollama.show(model=model_name)
+            # 1. Vérification dans 'capabilities'
+            capabilities = info.get('capabilities', [])
+            if 'vision' in capabilities:
+                return True
+            # 2. Vérification dans 'details' / 'families'
+            details = info.get('details', {})
+            families = details.get('families', [])
+            if families and any('vision' in f.lower() for f in families):
+                return True
+        except Exception:
+            pass
+            
+        # Fallback sémantique sur le nom du modèle
+        model_lower = model_name.lower()
+        known_vision_keywords = ['gemma4', 'llava', 'vision', 'paligemma', 'minicpm-v', 'bakllava', 'llama3.2-vision']
+        return any(k in model_lower for k in known_vision_keywords)
+
     def get_installed_models(self):
         """
         Interroge Ollama localement pour obtenir la liste des modèles installés.
@@ -50,7 +76,7 @@ class AIEngine:
             print(f"\n[DEBUG: Impossible de joindre Ollama pour lister les modèles -> {e}]")
             return []
 
-    def get_response(self, context_messages, user_summary="", assistant_summary="", assistant_name=DEFAULT_NAME, files_context="", model_name=None, chunk_callback=None, status_callback=None):
+    def get_response(self, context_messages, images=None, user_summary="", assistant_summary="", assistant_name=DEFAULT_NAME, files_context="", model_name=None, chunk_callback=None, status_callback=None):
         try:
             # 1. Construction du prompt système
             system_content = self.system_prompt.strip().format(name=assistant_name)
@@ -66,8 +92,18 @@ class AIEngine:
 
             _safe_print(f"\n[DIAGNOSTIC] EXACT SYSTEM PROMPT + INJECTED MEMORY:\n{system_content}\n")
 
-            # 2. Nettoyage des messages (Strict: role et content uniquement)
-            clean_context = [{"role": m["role"], "content": m["content"]} for m in context_messages]
+            # 2. Nettoyage des messages (role, content et optionnellement images)
+            clean_context = []
+            for m in context_messages:
+                clean_msg = {"role": m["role"], "content": m["content"]}
+                if "images" in m:
+                    clean_msg["images"] = m["images"]
+                clean_context.append(clean_msg)
+                
+            # Attacher les pièces jointes temporaires de la requête courante au tout dernier message utilisateur
+            if images and clean_context:
+                clean_context[-1]["images"] = images
+                
             messages = [{'role': 'system', 'content': system_content}] + clean_context
             
             target_model = model_name if model_name else self.model

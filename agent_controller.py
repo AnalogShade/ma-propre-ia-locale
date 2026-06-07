@@ -169,7 +169,7 @@ class AgentController:
             
         return {"handled": True, "action": "unknown", "message": f"Commande slash inconnue : {cmd}"}
 
-    def process_user_message_sync(self, user_input, chunk_callback=None, status_callback=None):
+    def process_user_message_sync(self, user_input, images=None, chunk_callback=None, status_callback=None):
         """
         Traite un message utilisateur en langage naturel de manière synchrone.
         Retourne un dictionnaire unifié contenant les résultats IA et système.
@@ -268,6 +268,7 @@ class AgentController:
         
         response = self.engine.get_response(
             context,
+            images=images,
             user_summary=user_summary,
             assistant_summary=assistant_summary,
             assistant_name=assistant_name,
