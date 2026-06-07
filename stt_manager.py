@@ -4,9 +4,12 @@ import wave
 from faster_whisper import WhisperModel
 import threading
 import os
+import queue
 
 class STTManager:
-    def __init__(self, on_model_ready=None, on_model_error=None):
+    def __init__(self, on_model_ready=None, on_model_error=None, 
+                 silence_threshold=0.015, silence_duration_limit=0.8, 
+                 pre_roll_duration=0.3, min_phrase_duration=0.3):
         # États du modèle
         self.is_model_loading = False
         self.is_model_ready = False
@@ -19,9 +22,22 @@ class STTManager:
         self.sample_rate = 16000
         self.stream = None
         
+        # Configurations VAD
+        self.silence_threshold = silence_threshold
+        self.silence_duration_limit = silence_duration_limit
+        self.pre_roll_duration = pre_roll_duration
+        self.min_phrase_duration = min_phrase_duration
+        
+        # États de concurrence et de contrôle
+        self.lock = threading.Lock()
+        self.active_transcriptions = 0
+        self.all_done_called = False
+        
         # Callbacks pour la GUI
         self.on_model_ready = on_model_ready
         self.on_model_error = on_model_error
+        self.on_phrase_transcribed = None
+        self.on_all_done = None
         
         # Lancer le chargement du modèle immédiatement
         self._load_model_in_background()
@@ -51,32 +67,144 @@ class STTManager:
             if self.on_model_error:
                 self.on_model_error(str(e))
 
-    def start_recording(self):
-        """Démarre la capture audio depuis le micro."""
+    def start_recording(self, on_phrase_transcribed=None, on_all_done=None):
+        """Démarre la capture audio depuis le micro en mode streaming."""
         if not self.is_model_ready:
             return False, "Le modèle n'est pas encore prêt."
         if self.is_recording:
             return False, "Enregistrement déjà en cours."
             
-        self.audio_data = []
+        self.on_phrase_transcribed = on_phrase_transcribed
+        self.on_all_done = on_all_done
         self.is_recording = True
+        self.all_done_called = False
+        self.active_transcriptions = 0
+        
+        self.audio_queue = queue.Queue()
+        self.current_phrase_audio = []
+        
+        # Calcul des tailles en échantillons
+        self.pre_roll_max_len = int(self.sample_rate * self.pre_roll_duration)
+        self.silence_limit_samples = int(self.sample_rate * self.silence_duration_limit)
+        self.min_phrase_samples = int(self.sample_rate * self.min_phrase_duration)
+        
+        # États de suivi VAD
+        self.pre_roll_buffer = []
+        self.has_speech = False
+        self.silence_samples = 0
         
         def callback(indata, frames, time, status):
             if status:
                 print(f"[STT_MANAGER] Attention audio: {status}")
-            self.audio_data.append(indata.copy())
+            if self.is_recording:
+                self.audio_queue.put(indata.copy())
 
         try:
             # Enregistrement en mono (channels=1)
             self.stream = sd.InputStream(samplerate=self.sample_rate, channels=1, callback=callback)
             self.stream.start()
+            
+            # Lancer le thread worker de traitement
+            self.worker_thread = threading.Thread(target=self._recording_worker, daemon=True)
+            self.worker_thread.start()
+            
             return True, "Enregistrement démarré."
         except Exception as e:
             self.is_recording = False
             return False, f"Erreur lors de l'accès au micro : {str(e)}"
 
-    def stop_recording_and_transcribe(self, on_transcription_done):
-        """Arrête l'enregistrement et lance la transcription asynchrone."""
+    def _recording_worker(self):
+        """Thread worker traitant le flux audio et détectant les pauses (VAD)."""
+        while self.is_recording or not self.audio_queue.empty():
+            try:
+                block = self.audio_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+                
+            samples = block.flatten()
+            if len(samples) == 0:
+                continue
+                
+            # Calcul de l'énergie efficace (RMS)
+            rms = np.sqrt(np.mean(samples**2))
+            
+            if rms > self.silence_threshold:
+                if not self.has_speech:
+                    # Début de parole : préfixer avec le pre-roll
+                    if self.pre_roll_buffer:
+                        self.current_phrase_audio.extend(self.pre_roll_buffer)
+                        self.pre_roll_buffer = []
+                    self.has_speech = True
+                
+                self.current_phrase_audio.extend(samples)
+                self.silence_samples = 0
+            else:
+                # Silence
+                if self.has_speech:
+                    self.current_phrase_audio.extend(samples)
+                    self.silence_samples += len(samples)
+                    
+                    if self.silence_samples >= self.silence_limit_samples:
+                        # Pause détectée ! Finaliser et transcrire le segment accumulé
+                        # Soustraire le silence de la fin de l'audio pour éviter d'envoyer trop de silence à Whisper
+                        audio_to_transcribe = self.current_phrase_audio[:-self.silence_samples]
+                        if len(audio_to_transcribe) >= self.min_phrase_samples:
+                            self._trigger_phrase_transcription(audio_to_transcribe)
+                        
+                        self.current_phrase_audio = []
+                        self.has_speech = False
+                        self.silence_samples = 0
+                else:
+                    # Accumulation du pre-roll circulaire
+                    self.pre_roll_buffer.extend(samples)
+                    if len(self.pre_roll_buffer) > self.pre_roll_max_len:
+                        self.pre_roll_buffer = self.pre_roll_buffer[-self.pre_roll_max_len:]
+
+    def _trigger_phrase_transcription(self, audio_samples):
+        """Lance un thread pour transcrire le segment audio donné."""
+        audio_np = np.array(audio_samples, dtype=np.float32)
+        with self.lock:
+            self.active_transcriptions += 1
+            
+        threading.Thread(
+            target=self._transcribe_phrase_thread,
+            args=(audio_np,),
+            daemon=True
+        ).start()
+
+    def _transcribe_phrase_thread(self, audio_np):
+        """Effectue la transcription asynchrone en mémoire et notifie la GUI."""
+        try:
+            # Écrêter l'audio pour éviter les distorsions
+            audio_np = np.clip(audio_np, -1.0, 1.0)
+            
+            # Transcription directe via faster-whisper en passant le numpy array
+            segments, info = self.model.transcribe(audio_np, beam_size=5, language="fr")
+            text = " ".join([segment.text for segment in segments]).strip()
+            
+            if text and self.on_phrase_transcribed:
+                self.on_phrase_transcribed(text)
+                
+        except Exception as e:
+            print(f"[STT_MANAGER] Erreur de transcription en tâche de fond : {e}")
+        finally:
+            with self.lock:
+                self.active_transcriptions -= 1
+            self._maybe_call_all_done()
+
+    def _maybe_call_all_done(self):
+        """Méthode interne thread-safe appelant le callback on_all_done."""
+        call_callback = False
+        with self.lock:
+            if not self.is_recording and self.active_transcriptions == 0 and not self.all_done_called:
+                self.all_done_called = True
+                call_callback = True
+                
+        if call_callback and self.on_all_done:
+            self.on_all_done()
+
+    def stop_recording(self):
+        """Arrête l'enregistrement et force le traitement de l'audio résiduel."""
         if not self.is_recording:
             return
             
@@ -85,47 +213,24 @@ class STTManager:
             self.stream.stop()
             self.stream.close()
             self.stream = None
-
-        if not self.audio_data:
-            on_transcription_done("")
-            return
-
-        # Concaténer tous les blocs audio capturés
-        audio_np = np.concatenate(self.audio_data, axis=0)
-        
-        # Lancer la transcription dans un thread séparé pour ne pas geler la GUI
-        threading.Thread(
-            target=self._transcribe_thread, 
-            args=(audio_np, on_transcription_done), 
-            daemon=True
-        ).start()
-
-    def _transcribe_thread(self, audio_np, on_transcription_done):
-        """Thread effectuant l'écriture du WAV et la transcription."""
-        temp_file = "data/temp_recording.wav"
-        try:
-            # Convertir le numpy array (float32) en int16 pour le fichier WAV en s\u00e9curisant les d\u00e9passements
-            audio_np = np.clip(audio_np, -1.0, 1.0)
-            audio_int16 = (audio_np * 32767).astype(np.int16)
             
-            with wave.open(temp_file, 'wb') as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2) # 2 octets = 16 bits
-                wf.setframerate(self.sample_rate)
-                wf.writeframes(audio_int16.tobytes())
-
-            # Transcription via faster-whisper
-            segments, info = self.model.transcribe(temp_file, beam_size=5, language="fr")
+        # [Stratégie 1] Attendre la fin complète du thread worker
+        if hasattr(self, 'worker_thread'):
+            self.worker_thread.join(timeout=1.0)
             
-            # Recomposer le texte
-            text = " ".join([segment.text for segment in segments])
-            
-            # Nettoyage du fichier temporaire
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
+        # Traiter l'audio restant après la fin du thread worker
+        if self.has_speech and self.current_phrase_audio:
+            # Retirer le silence éventuel à la fin
+            audio_to_transcribe = self.current_phrase_audio
+            if self.silence_samples > 0:
+                audio_to_transcribe = self.current_phrase_audio[:-self.silence_samples]
                 
-            on_transcription_done(text.strip())
-            
-        except Exception as e:
-            print(f"[STT_MANAGER] Erreur de transcription: {e}")
-            on_transcription_done("")
+            if len(audio_to_transcribe) >= self.min_phrase_samples:
+                self._trigger_phrase_transcription(audio_to_transcribe)
+                
+        self.current_phrase_audio = []
+        self.pre_roll_buffer = []
+        self.has_speech = False
+        
+        # Vérifier si on peut déjà appeler on_all_done
+        self._maybe_call_all_done()

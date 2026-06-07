@@ -305,21 +305,35 @@ class AnnaGUI:
 
     def toggle_recording(self):
         if not self.stt_manager.is_recording:
-            success, msg = self.stt_manager.start_recording()
+            success, msg = self.stt_manager.start_recording(
+                on_phrase_transcribed=self._on_phrase_transcribed,
+                on_all_done=self._on_all_done
+            )
             if success:
-                self.mic_button.config(text="\ud83d\udd34", fg="red")
+                self.mic_button.config(text="🔴", fg="red")
             else:
                 print(f"[GUI] Erreur STT: {msg}")
         else:
-            self.mic_button.config(text="\ud83d\udd04", fg="yellow", state="disabled")
-            self.stt_manager.stop_recording_and_transcribe(self._on_transcription_done)
+            self.mic_button.config(text="🔄", fg="yellow", state="disabled")
+            self.stt_manager.stop_recording()
 
-    def _on_transcription_done(self, text):
+    def _on_phrase_transcribed(self, text):
         def update_gui():
-            self.mic_button.config(text="🎙️", fg="white", state="normal")
             if text:
-                self.user_input.insert(tk.END, text + " ")
+                current_idx = self.user_input.index(tk.INSERT)
+                if current_idx != "1.0":
+                    char_before = self.user_input.get(f"{current_idx}-1c", current_idx)
+                    if char_before not in (" ", "\n", "\t"):
+                        self.user_input.insert(tk.INSERT, " ")
+                self.user_input.insert(tk.INSERT, text)
+                self.user_input.insert(tk.INSERT, " ")
+                self.user_input.see(tk.INSERT)
         self.root.after(0, update_gui)
+
+    def _on_all_done(self):
+        def reset_gui():
+            self.mic_button.config(text="🎙️", fg="white", state="normal")
+        self.root.after(0, reset_gui)
 
     def show_voice_menu(self):
         menu = tk.Menu(self.root, tearoff=0, bg="#333333", fg="white", activebackground="#03dac6", activeforeground="black")
