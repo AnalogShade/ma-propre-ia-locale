@@ -877,11 +877,13 @@ Note : Shift + Entrée pour un saut de ligne."""
                     self.append_chat("Système", result.get("message"))
                     
                 elif res_type == "error":
+                    title = "ERREUR SYSTÈME"
                     if self.ctrl.image_manager.is_active() or self.sd_generate_button.cget("text") == "🎨 Mode Image Actif":
+                        title = "ÉCHEC DE LA GÉNÉRATION"
                         self.sd_generate_button.config(text="🖼️ Générer une Image", bg="#333333", fg="white")
                         self.ctrl.image_manager.cancel_session()
                     
-                    self.show_error_block("ÉCHEC DE LA GÉNÉRATION", result.get("message"))
+                    self.show_error_block(title, result.get("message"))
                     return
                     
                 elif res_type == "ai_response" or res_type == "text":

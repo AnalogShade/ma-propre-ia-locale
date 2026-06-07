@@ -197,14 +197,15 @@ class AgentController:
                 "system_context": intent_result.get("system_context")
             }
             
-        # 3. Vérification garde-fou : besoin d'un répertoire de travail actif ou d'un fichier pour certaines requêtes
-        keywords_code = ["fichier", "code", "contenu", "analyse", "lis", "vois"]
-        if not self.files.working_dir and not self.files.last_file_load_success and any(k in user_input.lower() for k in keywords_code):
-            msg = "Aucun répertoire de travail ni fichier n'est défini. Spécifie d'abord ton dossier (ex: 'Voici mon dossier C:\\Projet')."
-            return {
-                "type": "error",
-                "message": msg
-            }
+        # 3. Vérification garde-fou : besoin d'un répertoire de travail actif ou d'un fichier pour certaines requêtes sémantiques détectées
+        file_actions_requiring_workspace = ["load_context", "close_file", "reload_file", "open_file"]
+        if not self.files.working_dir and not self.files.last_file_load_success:
+            if intent_result.get("action") in file_actions_requiring_workspace:
+                msg = "Aucun répertoire de travail ni fichier n'est défini. Spécifie d'abord ton dossier (ex: 'Voici mon dossier C:\\Projet')."
+                return {
+                    "type": "error",
+                    "message": msg
+                }
             
         # Récupération sélective de la mémoire (mode observation)
         memory_sources = {
