@@ -6,9 +6,14 @@ from PIL import Image, ImageTk
 from stt_manager import STTManager
 from tts_manager import TTSManager
 from agent_controller import AgentController
+import debug_export_service
+
 
 class AnnaGUI:
     def __init__(self, engine, memory):
+        # Démarrage de la capture des flux console (stdout/stderr)
+        debug_export_service.setup_terminal_capture()
+
         self.ctrl = AgentController()
         
         # Liaison dynamique pour conserver la compatibilité des anciens attributs graphiques
@@ -24,6 +29,7 @@ class AnnaGUI:
         self.root.title("ANNA - IA Locale")
         self.root.geometry("800x600")
         self.root.configure(bg="#121212") # Noir profond
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         # Layout principal (Gauche: Avatar | Droite: Chat)
         self.main_container = tk.Frame(self.root, bg="#121212")
@@ -173,6 +179,23 @@ class AnnaGUI:
 
         # Lancement de la détection asynchrone des checkpoints Stable Diffusion
         threading.Thread(target=self._detect_sd_checkpoints_thread, daemon=True).start()
+
+        # Cadre pour les actions d'utilitaires (Copie des logs)
+        self.utils_frame = tk.Frame(self.left_panel, bg="#1e1e1e", highlightbackground="#333333", highlightthickness=1)
+        self.utils_frame.pack(side="top", fill="x", pady=(15, 0))
+
+        self.copy_logs_button = tk.Button(
+            self.utils_frame, 
+            text="📋 Copier logs & traces", 
+            command=self.copy_logs_to_clipboard, 
+            bg="#333333", 
+            fg="white", 
+            activebackground="#bb86fc", 
+            activeforeground="black", 
+            relief="flat",
+            font=("Arial", 10, "bold")
+        )
+        self.copy_logs_button.pack(fill="x", padx=15, pady=15)
 
         # Chargement de l'image d'avatar
         self.load_avatar()
@@ -1225,6 +1248,47 @@ Note : Shift + Entrée pour un saut de ligne."""
         
         self.chat_area.config(state='disabled')
         self.chat_area.yview(tk.END)
+
+    def copy_logs_to_clipboard(self):
+        """Récupère et formate les logs & traces, puis les copie dans le presse-papiers."""
+        try:
+            # 1. Récupération des contenus textuels
+            chat_text = self.chat_area.get("1.0", tk.END)
+            trace_text = self.trace_text_area.get("1.0", tk.END)
+            
+            # 2. Récupération des informations de diagnostic
+            active_model = getattr(self.engine, "model", None)
+            working_dir = getattr(self.files, "working_dir", None)
+            current_file = getattr(self.files, "current_file_path", None)
+            
+            # 3. Formatage de l'export via le service
+            export_content = debug_export_service.generate_export_content(
+                chat_text=chat_text,
+                trace_text=trace_text,
+                active_model=active_model,
+                working_dir=working_dir,
+                current_file=current_file
+            )
+            
+            # 4. Copie dans le presse-papiers Tkinter
+            self.root.clipboard_clear()
+            self.root.clipboard_append(export_content)
+            
+            # 5. Indication visuelle temporaire dans la barre de statut
+            self.update_status("Logs & traces copiés dans le presse-papiers !", active=True)
+            self.root.after(3000, lambda: self.update_status("Prêt", active=False))
+        except Exception as e:
+            print(f"[ERREUR] Échec de la copie des logs : {e}")
+            self.update_status("Erreur lors de la copie des logs !", active=True)
+            self.root.after(3000, lambda: self.update_status("Prêt", active=False))
+
+    def on_close(self):
+        """Restaure proprement les flux d'origine à la fermeture de la fenêtre."""
+        try:
+            debug_export_service.restore_terminal_capture()
+        except Exception:
+            pass
+        self.root.destroy()
 
     def run(self):
         self.root.mainloop()
