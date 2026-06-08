@@ -1,7 +1,12 @@
-import sounddevice as sd
-import numpy as np
+try:
+    import sounddevice as sd
+    import numpy as np
+    from faster_whisper import WhisperModel
+    HAS_STT_DEPS = True
+except ImportError:
+    HAS_STT_DEPS = False
+
 import wave
-from faster_whisper import WhisperModel
 import threading
 import os
 import queue
@@ -10,6 +15,8 @@ class STTManager:
     def __init__(self, on_model_ready=None, on_model_error=None, 
                  silence_threshold=0.015, silence_duration_limit=0.8, 
                  pre_roll_duration=0.3, min_phrase_duration=0.3):
+        if not HAS_STT_DEPS:
+            raise ImportError("Dépendances manquantes pour STT (sounddevice, numpy, faster-whisper).")
         # États du modèle
         self.is_model_loading = False
         self.is_model_ready = False

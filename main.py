@@ -1,16 +1,37 @@
 import sys
+import os
+
+# 1. Vérification précoce des dépendances
+try:
+    import dependency_checker
+    is_console = "--console" in sys.argv
+    checker_results = dependency_checker.run_checker(is_console=is_console)
+    if checker_results is None:
+        print("[ANNA] Démarrage annulé en raison de dépendances manquantes.")
+        sys.exit(1)
+except Exception as e:
+    print(f"[ANNA] Erreur lors de la vérification des dépendances : {e}")
+    sys.exit(1)
+
+# 2. Imports sécurisés après la vérification
 from ai_engine import AIEngine
 from memory_manager import MemoryManager
 from config import SETTINGS_FILE, DEFAULT_MODEL_NAME
 from settings_manager import SettingsManager
 from gui import AnnaGUI
 
-def run_console(ctrl):
+def run_console(ctrl, checker_results=None):
     assistant_name = ctrl.memory.assistant_profile.get("nom", "Anna")
 
     print("==============================================")
     print(f"   {assistant_name.upper()} - MODE CONSOLE (v3.0) ")
     print("==============================================")
+
+    if checker_results and checker_results.get("user_messages"):
+        dependency_checker.safe_print_console("\nNotifications système :")
+        for msg in checker_results["user_messages"]:
+            dependency_checker.safe_print_console(f"  {msg}")
+        dependency_checker.safe_print_console("==============================================\n")
 
     try:
         while True:
@@ -113,7 +134,7 @@ def main():
     if "--console" in sys.argv:
         from agent_controller import AgentController
         ctrl = AgentController()
-        run_console(ctrl)
+        run_console(ctrl, checker_results)
     else:
         # Initialisation standalone pour la GUI (comportement d'origine préservé à 100%)
         settings = SettingsManager(SETTINGS_FILE)
@@ -123,7 +144,7 @@ def main():
         engine.model = saved_model
         
         memory = MemoryManager()
-        AnnaGUI(engine, memory).run()
+        AnnaGUI(engine, memory, checker_results).run()
 
 if __name__ == "__main__":
     main()

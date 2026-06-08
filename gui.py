@@ -11,7 +11,7 @@ from config import DEFAULT_ENABLE_COMPRESSED_CONTEXT, DEFAULT_HISTORY_CONTEXT_SI
 
 
 class AnnaGUI:
-    def __init__(self, engine, memory):
+    def __init__(self, engine, memory, checker_results=None):
         # Démarrage de la capture des flux console (stdout/stderr)
         debug_export_service.setup_terminal_capture()
 
@@ -37,11 +37,28 @@ class AnnaGUI:
         self.main_container.pack(expand=True, fill="both", padx=10, pady=10)
 
         # Initialisation STT & TTS
-        self.stt_manager = STTManager(
-            on_model_ready=self._on_stt_ready,
-            on_model_error=self._on_stt_error
-        )
-        self.tts_manager = TTSManager()
+        disabled_features = checker_results.get("disabled_features", []) if checker_results else []
+        
+        if "stt" not in disabled_features:
+            try:
+                self.stt_manager = STTManager(
+                    on_model_ready=self._on_stt_ready,
+                    on_model_error=self._on_stt_error
+                )
+            except Exception as e:
+                print(f"[GUI STT ERROR] {e}")
+                self.stt_manager = None
+        else:
+            self.stt_manager = None
+
+        if "tts" not in disabled_features:
+            try:
+                self.tts_manager = TTSManager()
+            except Exception as e:
+                print(f"[GUI TTS ERROR] {e}")
+                self.tts_manager = None
+        else:
+            self.tts_manager = None
         self.msg_counter = 0
         self.current_tts_tag = None
         self.generating = False
@@ -310,6 +327,19 @@ class AnnaGUI:
         # Lancement de la détection asynchrone des modèles installés
         threading.Thread(target=self._detect_models_thread, daemon=True).start()
 
+        # Configuration finale selon l'état des dépendances
+        if not self.stt_manager:
+            self.mic_button.config(text="🎙️ (Off)", state="disabled", fg="#555555")
+        if not self.tts_manager:
+            self.tts_button.config(text="🔊 (Off)", state="disabled", fg="#555555")
+        if checker_results and "sd" in checker_results.get("disabled_features", []):
+            self.sd_generate_button.config(text="🖼️ (SD Off)", state="disabled", bg="#222222", fg="#666666")
+
+        # Affichage des alertes système
+        if checker_results and checker_results.get("user_messages"):
+            for msg in checker_results["user_messages"]:
+                self.append_chat("Système", msg)
+
     # =========================================================================
     # SECTION AUDIO : GESTION LOCALE DU MICRO (STT) ET DE LA VOIX (TTS)
     # =========================================================================
@@ -321,6 +351,8 @@ class AnnaGUI:
         self.root.after(0, lambda: self.mic_button.config(text="\u274c", state="disabled"))
 
     def toggle_recording(self):
+        if not self.stt_manager:
+            return
         if not self.stt_manager.is_recording:
             success, msg = self.stt_manager.start_recording(
                 on_phrase_transcribed=self._on_phrase_transcribed,
@@ -353,6 +385,9 @@ class AnnaGUI:
         self.root.after(0, reset_gui)
 
     def show_voice_menu(self):
+        if not self.tts_manager:
+            messagebox.showwarning("Audio désactivé", "Le service de synthèse vocale (TTS) est indisponible.")
+            return
         menu = tk.Menu(self.root, tearoff=0, bg="#333333", fg="white", activebackground="#03dac6", activeforeground="black")
         voices = self.tts_manager.get_voices()
         
@@ -379,7 +414,8 @@ class AnnaGUI:
         """Met à jour le volume dans le TTSManager et actualise le label."""
         volume_pct = int(val)
         volume_float = volume_pct / 100.0
-        self.tts_manager.volume = volume_float
+        if self.tts_manager:
+            self.tts_manager.volume = volume_float
         
         # Mettre à jour dynamiquement l'icône et le texte
         if volume_pct == 0:
@@ -392,6 +428,8 @@ class AnnaGUI:
             self.volume_label.config(text=f"🔊 Volume : {volume_pct}%")
 
     def play_tts(self, message, tag_id):
+        if not self.tts_manager:
+            return
         # Si on clique sur le même message qui est déjà en cours de lecture : on arrête tout
         if self.tts_manager.is_playing and self.current_tts_tag == tag_id:
             self.tts_manager.stop()

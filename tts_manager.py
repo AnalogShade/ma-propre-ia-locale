@@ -1,8 +1,13 @@
 import os
 import threading
 import urllib.request
-import sounddevice as sd
-import numpy as np
+
+try:
+    import sounddevice as sd
+    import numpy as np
+    HAS_TTS_DEPS = True
+except ImportError:
+    HAS_TTS_DEPS = False
 
 # piper sera importé dynamiquement pour éviter les erreurs si installé à chaud
 
@@ -14,6 +19,8 @@ DEFAULT_VOICE_URL_JSON = "https://huggingface.co/rhasspy/piper-voices/resolve/ma
 
 class TTSManager:
     def __init__(self):
+        if not HAS_TTS_DEPS:
+            raise ImportError("Dépendances manquantes pour TTS (sounddevice, numpy).")
         self.voices_dir = VOICES_DIR
         if not os.path.exists(self.voices_dir):
             os.makedirs(self.voices_dir)
