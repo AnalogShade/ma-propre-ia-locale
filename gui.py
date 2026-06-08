@@ -7,6 +7,7 @@ from stt_manager import STTManager
 from tts_manager import TTSManager
 from agent_controller import AgentController
 import debug_export_service
+from config import DEFAULT_ENABLE_COMPRESSED_CONTEXT, DEFAULT_HISTORY_CONTEXT_SIZE
 
 
 class AnnaGUI:
@@ -209,6 +210,22 @@ class AnnaGUI:
         self.status_frame.pack(side="bottom", fill="x", padx=5, pady=(2, 2))
         self.status_label = tk.Label(self.status_frame, text="Prêt", bg="#121212", fg="#888888", font=("Arial", 9, "italic"), anchor="w")
         self.status_label.pack(side="left")
+        
+        # Bouton rouage pour la configuration de la mémoire sémantique et du contexte
+        self.context_settings_btn = tk.Button(
+            self.status_frame,
+            text="⚙️",
+            command=self.show_context_settings_dialog,
+            bg="#121212",
+            fg="#888888",
+            activebackground="#222222",
+            activeforeground="white",
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+            padx=5
+        )
+        self.context_settings_btn.pack(side="right")
 
         # Conteneur pour loger le chat et la trace côte à côte
         self.chat_and_trace_container = tk.Frame(self.right_frame, bg="#121212")
@@ -1170,6 +1187,76 @@ Note : Shift + Entrée pour un saut de ligne."""
             threading.Thread(target=self._detect_sd_checkpoints_thread, daemon=True).start()
             
             messagebox.showinfo("Succès", "Configuration sauvegardée avec succès !", parent=dialog)
+            dialog.destroy()
+
+        save_btn = tk.Button(btn_frame, text="✓ Enregistrer", command=save, bg="#03dac6", fg="black", activebackground="#018786", relief="flat", padx=15, pady=5)
+        save_btn.pack(side="left")
+
+        cancel_btn = tk.Button(btn_frame, text="Annuler", command=dialog.destroy, bg="#444444", fg="white", activebackground="#666666", relief="flat", padx=15, pady=5)
+        cancel_btn.pack(side="right")
+
+    def show_context_settings_dialog(self):
+        """Affiche une boîte de dialogue pour configurer la mémoire et la taille du contexte."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Réglages du Contexte")
+        dialog.geometry("450x250")
+        dialog.configure(bg="#1e1e1e")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Centrer par rapport à la fenêtre parente
+        dialog.geometry(f"+{self.root.winfo_x() + 100}+{self.root.winfo_y() + 100}")
+
+        # Titre
+        tk.Label(dialog, text="⚙️ CONFIGURATION DU CONTEXTE DE L'IA", bg="#1e1e1e", fg="#bb86fc", font=("Arial", 11, "bold")).pack(pady=(15, 15))
+
+        # Slider de taille de contexte
+        tk.Label(dialog, text="Nombre de messages récents envoyés mot à mot (contexte chronologique) :", bg="#1e1e1e", fg="#e0e0e0", anchor="w").pack(fill="x", padx=20)
+        
+        current_size = self.ctrl.settings.get_setting("history_context_size", DEFAULT_HISTORY_CONTEXT_SIZE)
+        
+        scale = tk.Scale(
+            dialog,
+            from_=2,
+            to=40,
+            orient="horizontal",
+            bg="#1e1e1e",
+            fg="#e0e0e0",
+            troughcolor="#333333",
+            activebackground="#03dac6",
+            highlightthickness=0,
+            bd=0,
+            showvalue=True
+        )
+        scale.pack(fill="x", padx=20, pady=(5, 15))
+        scale.set(current_size)
+
+        # Case à cocher pour le tampon de contexte compressé
+        current_enable = self.ctrl.settings.get_setting("enable_compressed_context", DEFAULT_ENABLE_COMPRESSED_CONTEXT)
+        enable_var = tk.BooleanVar(value=current_enable)
+        
+        chk = tk.Checkbutton(
+            dialog,
+            text="Activer la compression sémantique du contexte (Mémoire Roulante)",
+            variable=enable_var,
+            bg="#1e1e1e",
+            fg="#e0e0e0",
+            selectcolor="#333333",
+            activebackground="#1e1e1e",
+            activeforeground="white",
+            relief="flat",
+            bd=0
+        )
+        chk.pack(anchor="w", padx=20, pady=(0, 15))
+
+        # Boutons Sauvegarder et Fermer
+        btn_frame = tk.Frame(dialog, bg="#1e1e1e")
+        btn_frame.pack(fill="x", padx=20, pady=(10, 0))
+
+        def save():
+            self.ctrl.settings.set_setting("history_context_size", int(scale.get()))
+            self.ctrl.settings.set_setting("enable_compressed_context", enable_var.get())
+            messagebox.showinfo("Succès", "Configuration du contexte sauvegardée avec succès !", parent=dialog)
             dialog.destroy()
 
         save_btn = tk.Button(btn_frame, text="✓ Enregistrer", command=save, bg="#03dac6", fg="black", activebackground="#018786", relief="flat", padx=15, pady=5)

@@ -89,6 +89,9 @@ ASSISTANT_PROFILE_FILE = "data/assistant_profile.json"
 SETTINGS_FILE = "data/settings.json"
 FACTS_FILE = "data/long_term_facts.json"
 CONTEXT_WINDOW = 20
+DEFAULT_HISTORY_CONTEXT_SIZE = 10
+DEFAULT_ENABLE_COMPRESSED_CONTEXT = True
+COMPRESSED_CONTEXT_FILE = "data/compressed_context.txt"
 
 # --- PARAMÈTRES DE LA MÉMOIRE SÉLECTIVE ---
 ENABLE_SELECTIVE_MEMORY = True

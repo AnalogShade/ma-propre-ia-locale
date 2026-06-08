@@ -76,7 +76,7 @@ class AIEngine:
             print(f"\n[DEBUG: Impossible de joindre Ollama pour lister les modèles -> {e}]")
             return []
 
-    def get_response(self, context_messages, images=None, user_summary="", assistant_summary="", assistant_name=DEFAULT_NAME, files_context="", model_name=None, chunk_callback=None, status_callback=None):
+    def get_response(self, context_messages, images=None, user_summary="", assistant_summary="", assistant_name=DEFAULT_NAME, files_context="", compressed_context="", model_name=None, chunk_callback=None, status_callback=None):
         try:
             # 1. Construction du prompt système
             system_content = self.system_prompt.strip().format(name=assistant_name)
@@ -89,6 +89,9 @@ class AIEngine:
             
             if files_context:
                 system_content += f"\n{files_context}"
+
+            if compressed_context:
+                system_content += f"\n\n--- TAMPON DE CONTEXTE COMPRESSE (DISCUSSIONS PRECEDENTES) ---\n{compressed_context}\n--------------------------------------------------------------"
 
             _safe_print(f"\n[DIAGNOSTIC] EXACT SYSTEM PROMPT + INJECTED MEMORY:\n{system_content}\n")
 

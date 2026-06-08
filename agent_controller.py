@@ -1,7 +1,11 @@
 import threading
+import os
+import ollama
 from config import (
     SETTINGS_FILE, DEFAULT_MODEL_NAME, 
-    SELECTIVE_MEMORY_OBSERVATION, ENABLE_SELECTIVE_MEMORY
+    SELECTIVE_MEMORY_OBSERVATION, ENABLE_SELECTIVE_MEMORY,
+    DEFAULT_HISTORY_CONTEXT_SIZE, DEFAULT_ENABLE_COMPRESSED_CONTEXT,
+    COMPRESSED_CONTEXT_FILE, CONTEXT_WINDOW
 )
 from settings_manager import SettingsManager
 from ai_engine import AIEngine
@@ -76,6 +80,94 @@ class AgentController:
     def clear_history(self):
         """Efface l'historique court terme en mémoire."""
         self.memory.clear()
+        if os.path.exists(COMPRESSED_CONTEXT_FILE):
+            try:
+                os.remove(COMPRESSED_CONTEXT_FILE)
+            except Exception:
+                pass
+        self.settings.set_setting("last_consolidated_count", 0)
+
+    def _trigger_context_consolidation(self, older_count):
+        """Lance une consolidation asynchrone en arrière-plan."""
+        def task():
+            try:
+                last_consolidated = self.settings.get_setting("last_consolidated_count", 0)
+                new_messages_slice = self.memory.history[last_consolidated:older_count]
+                
+                # Lire l'ancien tampon
+                old_buffer = ""
+                if os.path.exists(COMPRESSED_CONTEXT_FILE):
+                    try:
+                        with open(COMPRESSED_CONTEXT_FILE, "r", encoding="utf-8") as f:
+                            old_buffer = f.read().strip()
+                    except Exception:
+                        pass
+                
+                # Formater les nouveaux messages
+                new_messages_text = ""
+                for msg in new_messages_slice:
+                    role_display = "Vous" if msg["role"] == "user" else "Anna"
+                    timestamp = msg.get("timestamp", "")
+                    ts_display = f" [{timestamp}]" if timestamp else ""
+                    new_messages_text += f"{ts_display} {role_display} : {msg['content']}\n"
+                
+                # Construire le prompt de consolidation
+                prompt = f"""Tu es un outil d'archivage et de compression de contexte. 
+Voici le tampon de contexte compressé précédent : 
+[ANCIEN TAMPON]
+{old_buffer if old_buffer else "(Aucun ancien tampon)"}
+
+Voici les nouveaux messages échangés depuis la dernière mise à jour :
+[NOUVEAUX MESSAGES]
+{new_messages_text}
+
+Met à jour et remplace le tampon en fusionnant ces informations. Le nouveau tampon doit conserver :
+- Les décisions importantes prises durant la conversation.
+- Les projets en cours et conclusions techniques.
+- Les préférences de l'utilisateur découvertes.
+- L'état général de la discussion.
+
+Règles strictes :
+1. Reste extrêmement factuel et concis (budget de 100 à 300 mots maximum).
+2. Renvoie UNIQUEMENT le nouveau tampon sous forme de liste de points clés (bullet points), sans formules de politesse ni bavardage.
+"""
+                target_model = self.engine.model
+                print(f"[CONSOLIDATION] Consolidation en cours de {len(new_messages_slice)} messages...")
+                
+                response = ollama.chat(
+                    model=target_model,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                
+                new_buffer = response.get("message", {}).get("content", "").strip()
+                
+                # Nettoyer d'éventuels blocs de réflexion générés par le modèle lors de la consolidation
+                if "<think>" in new_buffer:
+                    parts = new_buffer.split("<think>", 1)
+                    before = parts[0]
+                    rest = parts[1]
+                    if "</think>" in rest:
+                        new_buffer = before + rest.split("</think>", 1)[1]
+                    else:
+                        new_buffer = before
+                    new_buffer = new_buffer.strip()
+                
+                if new_buffer:
+                    # Sauvegarder
+                    os.makedirs(os.path.dirname(COMPRESSED_CONTEXT_FILE), exist_ok=True)
+                    with open(COMPRESSED_CONTEXT_FILE, "w", encoding="utf-8") as f:
+                        f.write(new_buffer)
+                    
+                    # Mettre à jour l'index de consolidation
+                    self.settings.set_setting("last_consolidated_count", older_count)
+                    print(f"[CONSOLIDATION SUCCÈS] Tampon mis à jour. Index consolidé : {older_count}")
+                else:
+                    print("[CONSOLIDATION WARNING] Le modèle a renvoyé un tampon vide, annulation.")
+                    
+            except Exception as e:
+                print(f"[CONSOLIDATION ERROR] Échec de la consolidation du contexte : {e}")
+
+        threading.Thread(target=task, daemon=True).start()
 
     def _trigger_background_memory_task(self, user_msg):
         """Lance une tâche asynchrone en tâche de fond pour l'extraction de faits en mémoire."""
@@ -264,8 +356,20 @@ class AgentController:
         files_context = self.files.get_context_for_ai()
         assistant_name = self.memory.assistant_profile.get("nom", "Anna")
         
+        # Récupération de la configuration dynamique du contexte
+        context_size = self.settings.get_setting("history_context_size", DEFAULT_HISTORY_CONTEXT_SIZE)
+        enable_compressed = self.settings.get_setting("enable_compressed_context", DEFAULT_ENABLE_COMPRESSED_CONTEXT)
+        
+        compressed_context = ""
+        if enable_compressed and os.path.exists(COMPRESSED_CONTEXT_FILE):
+            try:
+                with open(COMPRESSED_CONTEXT_FILE, "r", encoding="utf-8") as f:
+                    compressed_context = f.read().strip()
+            except Exception as e:
+                print(f"[CONTROLLER WARNING] Impossible de lire le tampon de contexte : {e}")
+        
         self.memory.add_message("user", user_input)
-        context = self.memory.get_context()
+        context = self.memory.get_context(context_size)
         
         response = self.engine.get_response(
             context,
@@ -274,12 +378,21 @@ class AgentController:
             assistant_summary=assistant_summary,
             assistant_name=assistant_name,
             files_context=files_context,
+            compressed_context=compressed_context,
             chunk_callback=chunk_callback,
             status_callback=status_callback
         )
         
         if status_callback:
             status_callback("Finalisation...")
+            
+        # Déclencheur du tampon de contexte compressé
+        older_messages = self.memory.history[:-context_size]
+        older_count = len(older_messages)
+        last_consolidated = self.settings.get_setting("last_consolidated_count", 0)
+        
+        if enable_compressed and older_count >= 5 and (older_count - last_consolidated) >= 5:
+            self._trigger_context_consolidation(older_count)
         
         if not response:
             user_name = self.memory.user_profile.get("prénom", "Louis")
@@ -300,6 +413,10 @@ class AgentController:
                 clean_response = before_think + rest.split("</think>", 1)[1]
             else:
                 clean_response = before_think
+                
+        # Protection contre les réponses vides (coupure pendant la réflexion)
+        if not clean_response.strip():
+            clean_response = "[La réponse a été interrompue durant la réflexion]"
 
         # Enregistrement de la réponse propre dans l'historique
         self.memory.add_message("assistant", clean_response)

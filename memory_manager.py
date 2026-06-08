@@ -92,9 +92,11 @@ class MemoryManager:
         elif cat == "long_term_facts":
             self.add_fact(cle, val)
 
-    def get_context(self):
+    def get_context(self, context_size=None):
         """Retourne les derniers messages pour Ollama."""
-        return self.history[-CONTEXT_WINDOW:]
+        if context_size is None:
+            context_size = CONTEXT_WINDOW
+        return self.history[-context_size:]
 
     def get_user_info_summary(self):
         """Crée un résumé naturel des connaissances sur l'utilisateur."""
