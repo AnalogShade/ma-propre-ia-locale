@@ -213,21 +213,79 @@ class CodeEditor:
             if "\r\n" in original_content:
                 newline_char = "\r\n"
                 
-            search_normalized = search_text.replace("\r\n", "\n").replace("\n", newline_char)
-            replace_normalized = replace_text.replace("\r\n", "\n").replace("\n", newline_char)
+            search_normalized_ends = search_text.replace("\r\n", "\n").replace("\n", newline_char)
+            replace_normalized_ends = replace_text.replace("\r\n", "\n").replace("\n", newline_char)
             
-            # Vérifier si le texte SEARCH est présent dans le fichier
-            if search_normalized not in original_content:
-                return False, "Le bloc de code à remplacer (SEARCH) n'a pas été trouvé exactement dans le fichier. Modification annulée."
+            new_content = None
+            
+            # 1. Correspondance exacte unique
+            exact_count = original_content.count(search_normalized_ends)
+            if exact_count == 1:
+                new_content = original_content.replace(search_normalized_ends, replace_normalized_ends, 1)
+            elif exact_count > 1:
+                return False, "Le bloc de code à remplacer (SEARCH) est ambigu car il a été trouvé plusieurs fois exactement dans le fichier. Modification annulée."
+            else:
+                # 2. Tolérance aux espaces / indentation / lignes vides (contiguë)
+                import difflib
                 
+                def normalize(line):
+                    return "".join(line.split())
+                    
+                original_lines = original_content.splitlines()
+                search_lines = search_text.splitlines()
+                replace_lines = replace_text.splitlines()
+                
+                non_empty_orig = [(idx, normalize(line)) for idx, line in enumerate(original_lines) if line.strip()]
+                non_empty_search = [(idx, normalize(line)) for idx, line in enumerate(search_lines) if line.strip()]
+                
+                if not non_empty_search:
+                    return False, "Le bloc de code à remplacer (SEARCH) est vide. Modification annulée."
+                    
+                search_len = len(non_empty_search)
+                orig_len = len(non_empty_orig)
+                matched_starts = []
+                
+                for start_idx in range(orig_len - search_len + 1):
+                    match = True
+                    for offset in range(search_len):
+                        if non_empty_orig[start_idx + offset][1] != non_empty_search[offset][1]:
+                            match = False
+                            break
+                    if match:
+                        matched_starts.append(start_idx)
+                        
+                if len(matched_starts) == 1:
+                    first_orig_idx = non_empty_orig[matched_starts[0]][0]
+                    last_orig_idx = non_empty_orig[matched_starts[0] + search_len - 1][0]
+                    new_content_lines = original_lines[:first_orig_idx] + replace_lines + original_lines[last_orig_idx + 1:]
+                    new_content = newline_char.join(new_content_lines)
+                elif len(matched_starts) > 1:
+                    return False, "Le bloc de code à remplacer (SEARCH) est ambigu car il correspond à plusieurs emplacements différents dans le fichier. Modification annulée."
+                else:
+                    # 3. Détection de bloc non-contigu (omissions de lignes)
+                    norm_orig_only = [val for _, val in non_empty_orig]
+                    norm_search_only = [val for _, val in non_empty_search]
+                    
+                    matcher = difflib.SequenceMatcher(None, norm_search_only, norm_orig_only)
+                    matching_blocks = matcher.get_matching_blocks()
+                    
+                    total_matched_lines = sum(size for _, _, size in matching_blocks)
+                    
+                    if total_matched_lines == len(norm_search_only):
+                        return False, (
+                            "Le bloc de code à remplacer (SEARCH) semble contenir des omissions ou des lignes sautées.\n"
+                            "Anna a probablement omis des sections de code inchangées pour économiser de la place.\n"
+                            "Par mesure de sécurité pour éviter de corrompre votre fichier, la modification est refusée.\n"
+                            "Conseil : Veuillez demander à Anna de découper ses modifications en blocs SEARCH/REPLACE plus petits et contigus."
+                        )
+                        
+                    return False, "Le bloc de code à remplacer (SEARCH) n'a pas été trouvé dans le fichier. Modification annulée."
+            
             # Créer la sauvegarde de sécurité
             if not self._create_backup(path):
                 return False, "Impossible de créer la sauvegarde de sécurité (.bak). Écriture annulée."
                 
             try:
-                # Effectuer le remplacement
-                new_content = original_content.replace(search_normalized, replace_normalized)
-                
                 # Écrire sur le disque
                 with open(path, 'w', encoding='utf-8') as f:
                     f.write(new_content)

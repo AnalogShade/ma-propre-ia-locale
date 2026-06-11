@@ -1,5 +1,3 @@
-print('Hello')
-print('Anna')
-# A comment
-def foo():
-    pass
+line1
+gap
+line2

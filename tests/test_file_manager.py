@@ -40,15 +40,30 @@ def test_file_manager_and_editor():
     
     # 5. Test CodeEditor - apply_edit (Search & Replace)
     abs_hello_path = (test_dir / "hello.py").resolve()
+    
+    # 5a. Test exact unique match
     search_text = "print('World')"
     replace_text = "print('Anna')"
     success, msg = editor.apply_edit(abs_hello_path, search_text, replace_text)
-    print(f"CodeEditor apply_edit: {success} | {msg}")
+    print(f"CodeEditor apply_edit (exact unique): {success} | {msg}")
     
-    # Vérification du nouveau contenu de hello.py
-    if success:
-        content = Path(abs_hello_path).read_text(encoding='utf-8')
-        print("Nouveau contenu de hello.py :\n" + content)
+    # 5b. Test space/indentation tolerant unique match
+    # Let's write some lines with spaces in hello.py
+    (test_dir / "hello.py").write_text("print('Line 1')\n  print('Line 2')\nprint('Line 3')\n", encoding='utf-8')
+    search_tolerant = "print('Line 1')\nprint('Line 2')"
+    replace_tolerant = "print('Line 1')\nprint('Line 2_modified')"
+    success, msg = editor.apply_edit(abs_hello_path, search_tolerant, replace_tolerant)
+    print(f"CodeEditor apply_edit (tolerant unique): {success} | {msg}")
+    
+    # 5c. Test ambiguous match (multiple matches)
+    (test_dir / "hello.py").write_text("item\nitem\n", encoding='utf-8')
+    success, msg = editor.apply_edit(abs_hello_path, "item", "item_mod")
+    print(f"CodeEditor apply_edit (ambiguous): {success} | {msg}")
+    
+    # 5d. Test non-contiguous match detection
+    (test_dir / "hello.py").write_text("line1\ngap\nline2\n", encoding='utf-8')
+    success, msg = editor.apply_edit(abs_hello_path, "line1\nline2", "line1_mod\nline2_mod")
+    print(f"CodeEditor apply_edit (non-contiguous): {success} | {msg}")
 
     # 6. Test de sécurité (lecture hors du working_dir)
     success, msg = fm.load_file("../../main.py")
