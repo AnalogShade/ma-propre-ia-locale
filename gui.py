@@ -1038,8 +1038,11 @@ Note : Shift + Entrée pour un saut de ligne."""
                         if att.get_type() == "image":
                             self.append_chat_image(att.image)
 
-                # Vider la zone de saisie et miniatures
+                # Vider la zone de saisie et miniatures (bascule temporaire à 'normal' requise si désactivé)
+                self.user_input.config(state="normal")
                 self.user_input.delete("1.0", tk.END)
+                if self.generating:
+                    self.user_input.config(state="disabled")
                 self.attachments = []
                 self.update_attachments_ui()
                 
