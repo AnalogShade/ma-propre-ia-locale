@@ -13,3 +13,6 @@ voices/fr_FR-upmc-medium.onnx.json
 
 # Logs
 data/diagnostic.log
+
+# Contextes
+compressed_context.txt
