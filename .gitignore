@@ -10,3 +10,6 @@ data/*.json
 avatar/00000-3620528860.png
 voices/fr_FR-upmc-medium.onnx
 voices/fr_FR-upmc-medium.onnx.json
+
+# Logs
+data/diagnostic.log
