@@ -314,6 +314,28 @@ class AnnaGUI:
         )
         self.context_settings_btn.pack(side="right")
 
+        # Bouton de mise à jour manuelle
+        btn_text = "🔄"
+        try:
+            btn_text.encode(sys.stdout.encoding or "utf-8")
+        except Exception:
+            btn_text = "MAJ"
+
+        self.update_check_btn = tk.Button(
+            self.status_frame,
+            text=btn_text,
+            command=self.manual_update_check,
+            bg="#121212",
+            fg="#888888",
+            activebackground="#222222",
+            activeforeground="white",
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+            padx=5
+        )
+        self.update_check_btn.pack(side="right", padx=(0, 5))
+
         # Conteneur pour loger le chat et la trace côte à côte
         self.chat_and_trace_container = tk.Frame(self.right_frame, bg="#121212")
         self.chat_and_trace_container.pack(expand=True, fill="both", padx=5, pady=5)
@@ -409,6 +431,77 @@ class AnnaGUI:
         if checker_results and checker_results.get("user_messages"):
             for msg in checker_results["user_messages"]:
                 self.append_chat("Système", msg)
+
+        # Lancement de la vérification automatique des mises à jour en tâche de fond (respecte la limite des 24h)
+        threading.Thread(target=self._check_for_updates_bg, args=(False,), daemon=True).start()
+
+    # =========================================================================
+    # SECTION MISE À JOUR : GESTIONNAIRE DE MISES À JOUR
+    # =========================================================================
+
+    def manual_update_check(self):
+        """Déclenche une vérification manuelle immédiate (force=True)."""
+        self.update_check_btn.config(state="disabled")
+        self.update_status("Vérification des mises à jour...", active=True)
+        threading.Thread(target=self._check_for_updates_bg, args=(True,), daemon=True).start()
+
+    def _check_for_updates_bg(self, is_manual=False):
+        import update_manager
+        try:
+            update_available, remote_version, error_msg, mode = update_manager.check_for_updates(
+                self.settings, force=is_manual
+            )
+            
+            if update_available:
+                if error_msg == "local_changes":
+                    if is_manual:
+                        self.root.after(0, lambda: messagebox.showwarning(
+                            "Mise à jour impossible",
+                            f"Une mise à jour ({remote_version}) est disponible, mais vous avez des modifications "
+                            "locales non validées dans votre dépôt Git.\n\nVeuillez les commiter ou les remiser (stash) "
+                            "avant de faire la mise à jour."
+                        ))
+                    self.root.after(0, lambda: self.update_status("Prêt", active=False))
+                else:
+                    self.root.after(0, lambda: self._prompt_update(remote_version, mode))
+            else:
+                if error_msg:
+                    if is_manual:
+                        self.root.after(0, lambda: messagebox.showwarning(
+                            "Échec de la vérification",
+                            f"Impossible de contacter le serveur de mise à jour :\n{error_msg}"
+                        ))
+                    self.root.after(0, lambda: self.update_status("Prêt", active=False))
+                else:
+                    if is_manual:
+                        self.root.after(0, lambda: self.update_status("Anna est à jour", active=False))
+                        self.root.after(3000, lambda: self.update_status("Prêt", active=False))
+                    else:
+                        self.root.after(0, lambda: self.update_status("Prêt", active=False))
+        except Exception as e:
+            if is_manual:
+                self.root.after(0, lambda: messagebox.showwarning(
+                    "Erreur de mise à jour",
+                    f"Une erreur est survenue lors de la vérification :\n{str(e)}"
+                ))
+            self.root.after(0, lambda: self.update_status("Prêt", active=False))
+        finally:
+            self.root.after(0, lambda: self.update_check_btn.config(state="normal"))
+
+    def _prompt_update(self, latest_version, mode):
+        self.update_status("Mise à jour disponible", active=True)
+        ans = messagebox.askyesno(
+            "Mise à jour disponible",
+            f"Des mises à jour sont disponibles pour votre application (version/commit : {latest_version}).\n"
+            "Voulez-vous fermer Anna et lancer la mise à jour maintenant ?"
+        )
+        if ans:
+            self.update_status("Lancement de l'updater...", active=True)
+            import update_manager
+            update_manager.start_updater(mode)
+            self.root.after(100, self.on_close)
+        else:
+            self.update_status("Prêt", active=False)
 
     # =========================================================================
     # SECTION AUDIO : GESTION LOCALE DU MICRO (STT) ET DE LA VOIX (TTS)
