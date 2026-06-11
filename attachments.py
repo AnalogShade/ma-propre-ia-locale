@@ -33,6 +33,9 @@ class ImageAttachment(Attachment):
         self.image = image
         self.file_path = file_path # Chemin original si chargé depuis un fichier
         self.temp_path = None      # Chemin temporaire créé pour Ollama
+        self.final_width = None
+        self.final_height = None
+        self.file_size_kb = None
 
     def get_type(self) -> str:
         return "image"
@@ -69,6 +72,13 @@ class ImageAttachment(Attachment):
 
         # Sauvegarder au format JPEG (qualité configurable, conversion en RGB nécessaire si RGBA/palette)
         resized_image.convert("RGB").save(self.temp_path, "JPEG", quality=VISION_IMAGE_JPEG_QUALITY)
+        
+        self.final_width, self.final_height = resized_image.size
+        try:
+            self.file_size_kb = os.path.getsize(self.temp_path) / 1024.0
+        except Exception:
+            self.file_size_kb = 0.0
+            
         return self.temp_path
 
     def clean(self):

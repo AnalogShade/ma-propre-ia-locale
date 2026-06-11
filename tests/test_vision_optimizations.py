@@ -83,29 +83,82 @@ class TestVisionOptimizations(unittest.TestCase):
             self.engine.get_gpu_vram = original_get_gpu_vram
             self.engine.get_model_size = original_get_model_size
 
+    def test_estimate_image_vision_cost_gb(self):
+        # Test 1: very small image
+        self.assertEqual(self.engine.estimate_image_vision_cost_gb(60, 60), 0.05)
+        # Test 2: medium image
+        self.assertEqual(self.engine.estimate_image_vision_cost_gb(300, 300), 0.15)
+        # Test 3: large image
+        self.assertEqual(self.engine.estimate_image_vision_cost_gb(700, 700), 0.35)
+        # Test 4: very large image
+        self.assertEqual(self.engine.estimate_image_vision_cost_gb(1000, 1000), 0.75)
+        # Test 5: fallback for invalid values
+        self.assertEqual(self.engine.estimate_image_vision_cost_gb(None, 0), 0.35)
+
     def test_evaluate_request_risk_calculation(self):
         # Mock AIEngine methods to return controlled values
         original_get_gpu_vram = self.engine.get_gpu_vram
         original_get_model_size = self.engine.get_model_size
         
         try:
-            # Case 1: Low risk (VRAM = 8GB, Model = 3GB)
-            # Model size (3GB) + Image extra (1.5GB) = 4.5GB < 8GB * 0.75 (6GB) -> low_risk
+            # Case 1: Low risk (VRAM = 8GB, Model = 3GB, small image 60x60)
+            # Model size (3GB) + Image (0.05GB) = 3.05GB. Ratio = 3.05/8 = 0.38 < 0.90 -> low_risk
             self.engine.get_gpu_vram = lambda: 8.0
             self.engine.get_model_size = lambda m: 3.0
-            risk = self.engine.evaluate_request_risk("dummy_model", has_image=True)
+            risk = self.engine.evaluate_request_risk("dummy_model", image_infos=[{"width": 60, "height": 60, "file_size_kb": 8.0}])
             self.assertEqual(risk["level"], "low_risk")
             self.assertEqual(risk["confidence"], "high")
 
-            # Case 2: Moderate risk (VRAM = 6GB, Model = 3.5GB)
-            # Model size (3.5GB) + Image extra (1.5GB) = 5.0GB > 6GB * 0.75 (4.5GB) but <= 6GB -> moderate_risk
+            # Case 2: Moderate risk (VRAM = 6GB, Model = 5.5GB, small image 60x60)
+            # Model size (5.5GB) + Image (0.05GB) = 5.55GB. Ratio = 5.55/6 = 0.925 (between 0.90 and 1.35) -> moderate_risk
             self.engine.get_gpu_vram = lambda: 6.0
-            self.engine.get_model_size = lambda m: 3.5
-            risk = self.engine.evaluate_request_risk("dummy_model", has_image=True)
+            self.engine.get_model_size = lambda m: 5.5
+            risk = self.engine.evaluate_request_risk("dummy_model", image_infos=[{"width": 60, "height": 60, "file_size_kb": 8.0}])
             self.assertEqual(risk["level"], "moderate_risk")
+            self.assertEqual(risk["reason"], "Modèle légèrement supérieur à la VRAM détectée, mais image très petite.")
             
-            # Case 3: High risk (VRAM = 6GB, Model = 8GB)
-            # Model size (8GB) + Image extra (1.5GB) = 9.5GB > 6GB -> high_risk
+            # Case 3: High risk due to high ratio (VRAM = 6GB, Model = 8.5GB, small image 60x60)
+            # Model size (8.5GB) + Image (0.05GB) = 8.55GB. Ratio = 8.55/6 = 1.425 >= 1.35 -> high_risk
+            self.engine.get_gpu_vram = lambda: 6.0
+            self.engine.get_model_size = lambda m: 8.5
+            risk = self.engine.evaluate_request_risk("dummy_model", image_infos=[{"width": 60, "height": 60, "file_size_kb": 8.0}])
+            self.assertEqual(risk["level"], "high_risk")
+
+            # Case 4: Low VRAM escalation (VRAM = 3GB, Model = 2GB, medium image 200x200)
+            # VRAM <= 4.0 and Model (2.0) is not heavy (2.0 < 3.0*0.9=2.7), but image is medium (200x200, pixels > 128*128).
+            # So VRAM low and image medium/large -> high_risk escalation.
+            self.engine.get_gpu_vram = lambda: 3.0
+            self.engine.get_model_size = lambda m: 2.0
+            risk = self.engine.evaluate_request_risk("dummy_model", image_infos=[{"width": 200, "height": 200, "file_size_kb": 20.0}])
+            self.assertEqual(risk["level"], "high_risk")
+
+            # Case 5: Low VRAM no escalation (VRAM = 3GB, Model = 1.5GB, small image 60x60)
+            # VRAM <= 4.0, Model (1.5) not heavy, image is small -> no escalation.
+            # Ratio = (1.5 + 0.05)/3 = 0.517. With low VRAM penalty: 0.517 + 0.15 = 0.667 < 0.90 -> low_risk
+            self.engine.get_gpu_vram = lambda: 3.0
+            self.engine.get_model_size = lambda m: 1.5
+            risk = self.engine.evaluate_request_risk("dummy_model", image_infos=[{"width": 60, "height": 60, "file_size_kb": 8.0}])
+            self.assertEqual(risk["level"], "low_risk")
+
+            # Case 6: Large image and heavy model escalation (VRAM = 6GB, Model = 5.5GB, large image 700x700)
+            # VRAM = 6.0, Model (5.5) >= 5.4 (heavy). Image dimension (700) >= 600 (large).
+            # Under ratio, it would be moderate (ratio = (5.5 + 0.35)/6 = 0.975), but it escalates to high_risk.
+            self.engine.get_gpu_vram = lambda: 6.0
+            self.engine.get_model_size = lambda m: 5.5
+            risk = self.engine.evaluate_request_risk("dummy_model", image_infos=[{"width": 700, "height": 700, "file_size_kb": 50.0}])
+            self.assertEqual(risk["level"], "high_risk")
+
+            # Case 7: Multiple medium/large images escalation (VRAM = 6GB, Model = 5.5GB, two medium images 200x200)
+            # Model is heavy (5.5 >= 5.4). Two medium images (pixels > 128*128). Escalates to high_risk.
+            self.engine.get_gpu_vram = lambda: 6.0
+            self.engine.get_model_size = lambda m: 5.5
+            risk = self.engine.evaluate_request_risk("dummy_model", image_infos=[
+                {"width": 200, "height": 200, "file_size_kb": 20.0},
+                {"width": 200, "height": 200, "file_size_kb": 20.0}
+            ])
+            self.assertEqual(risk["level"], "high_risk")
+
+            # Case 8: Backward compatibility with boolean has_image=True
             self.engine.get_gpu_vram = lambda: 6.0
             self.engine.get_model_size = lambda m: 8.0
             risk = self.engine.evaluate_request_risk("dummy_model", has_image=True)

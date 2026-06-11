@@ -10,6 +10,75 @@ import debug_export_service
 from config import DEFAULT_ENABLE_COMPRESSED_CONTEXT, DEFAULT_HISTORY_CONTEXT_SIZE
 
 
+class ConfirmVisionRiskDialog(tk.Toplevel):
+    def __init__(self, parent, model_name, model_size_str, gpu_vram_str):
+        super().__init__(parent)
+        self.title("⚠️ Avertissement de performance")
+        self.geometry("450x250")
+        self.resizable(False, False)
+        self.configure(bg="#1e1e1e")
+        self.result = False
+        self.dont_warn_again = False
+        
+        # Centrer par rapport au parent
+        self.transient(parent)
+        self.grab_set()
+        
+        try:
+            x = parent.winfo_rootx() + (parent.winfo_width() // 2) - 225
+            y = parent.winfo_rooty() + (parent.winfo_height() // 2) - 125
+            self.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+
+        label_text = (
+            "La taille estimée du modèle est supérieure à la VRAM détectée. "
+            "L'analyse d'image pourrait être très lente, échouer, ou faire travailler "
+            "fortement votre ordinateur.\n\n"
+            f"Modèle actif : {model_name}\n"
+            f"Taille estimée du modèle : {model_size_str} Go\n"
+            f"VRAM détectée : {gpu_vram_str} Go"
+        )
+        
+        lbl = tk.Label(self, text=label_text, justify="left", bg="#1e1e1e", fg="#e0e0e0", wraplength=410, font=("Arial", 10))
+        lbl.pack(padx=20, pady=(20, 10), fill="both", expand=True)
+        
+        self.var_dont_warn = tk.BooleanVar()
+        chk = tk.Checkbutton(
+            self, 
+            text="Ne plus m'avertir pour ce modèle pendant cette session", 
+            variable=self.var_dont_warn,
+            bg="#1e1e1e", 
+            fg="#e0e0e0", 
+            selectcolor="#333333",
+            activebackground="#1e1e1e",
+            activeforeground="#e0e0e0",
+            font=("Arial", 9)
+        )
+        chk.pack(padx=20, pady=5, anchor="w")
+        
+        btn_frame = tk.Frame(self, bg="#1e1e1e")
+        btn_frame.pack(padx=20, pady=(10, 20), fill="x")
+        
+        btn_yes = tk.Button(btn_frame, text="Continuer", width=12, command=self.on_yes, bg="#bb86fc", fg="black", activebackground="#9a67db", relief="flat", font=("Arial", 9, "bold"))
+        btn_yes.pack(side="right", padx=(10, 0))
+        
+        btn_no = tk.Button(btn_frame, text="Annuler", width=12, command=self.on_no, bg="#333333", fg="white", activebackground="#444444", relief="flat", font=("Arial", 9))
+        btn_no.pack(side="right")
+        
+        self.protocol("WM_DELETE_WINDOW", self.on_no)
+        self.wait_window()
+
+    def on_yes(self):
+        self.result = True
+        self.dont_warn_again = self.var_dont_warn.get()
+        self.destroy()
+
+    def on_no(self):
+        self.result = False
+        self.destroy()
+
+
 class AnnaGUI:
     def __init__(self, engine, memory, checker_results=None):
         # Démarrage de la capture des flux console (stdout/stderr)
@@ -24,6 +93,7 @@ class AnnaGUI:
         self.router = self.ctrl.router
         self.editor = self.ctrl.editor
         self.settings = self.ctrl.settings
+        self.ignored_models_this_session = set()
         
         # Fenêtre principale
         self.root = tk.Tk()
@@ -855,32 +925,41 @@ Note : Shift + Entrée pour un saut de ligne."""
                     return
 
         # 5. Évaluer le risque avec evaluate_request_risk
-        risk_analysis = self.ctrl.engine.evaluate_request_risk(active_model, has_image)
+        image_infos = []
+        for att in self.attachments:
+            if att.get_type() == "image":
+                image_infos.append({
+                    "width": att.final_width,
+                    "height": att.final_height,
+                    "file_size_kb": att.file_size_kb
+                })
+
+        risk_analysis = self.ctrl.engine.evaluate_request_risk(active_model, image_infos=image_infos)
         risk_level = risk_analysis.get("level", "low_risk")
 
         # 6. Si high_risk, demander confirmation de manière non-destructrice
         if has_image and risk_level == "high_risk":
-            model_size = risk_analysis.get("model_size_gb")
-            gpu_vram = risk_analysis.get("gpu_vram_gb")
-            model_size_str = f"{model_size:.1f}" if model_size is not None else "Inconnu"
-            gpu_vram_str = f"{gpu_vram:.1f}" if gpu_vram is not None else "Inconnu"
-            
-            prompt_text = (
-                "La taille estimée du modèle est supérieure à la VRAM détectée. L'analyse d'image pourrait être très lente, "
-                "échouer, ou faire travailler fortement votre ordinateur.\n\n"
-                f"Modèle actif : {active_model}\n"
-                f"Taille estimée du modèle : {model_size_str} Go\n"
-                f"VRAM détectée : {gpu_vram_str} Go\n\n"
-                "Voulez-vous quand même continuer ?"
-            )
-            confirm = messagebox.askyesno("⚠️ Avertissement de performance", prompt_text)
-            if not confirm:
-                # L'utilisateur annule : on ne touche à rien
-                return
+            if active_model not in self.ignored_models_this_session:
+                model_size = risk_analysis.get("model_size_gb")
+                gpu_vram = risk_analysis.get("gpu_vram_gb")
+                model_size_str = f"{model_size:.1f}" if model_size is not None else "Inconnu"
+                gpu_vram_str = f"{gpu_vram:.1f}" if gpu_vram is not None else "Inconnu"
+                
+                # Utiliser la boîte de dialogue personnalisée
+                dialog = ConfirmVisionRiskDialog(self.root, active_model, model_size_str, gpu_vram_str)
+                if not dialog.result:
+                    # L'utilisateur annule : on ne touche à rien
+                    return
+                
+                if dialog.dont_warn_again:
+                    self.ignored_models_this_session.add(active_model)
         
         # 7. Si moderate_risk, mettre à jour le statut
         if has_image and risk_level == "moderate_risk":
-            self.update_status("⚠️ Modèle lourd : calcul lent à prévoir...", active=True)
+            if risk_analysis.get("confidence") == "low":
+                self.update_status("⚠️ Performance incertaine : l’analyse peut être lente.", active=True)
+            else:
+                self.update_status("⚠️ Modèle lourd détecté : l’analyse peut être lente.", active=True)
 
         # 8. Sauvegarder les pièces jointes à nettoyer
         attachments_to_clean = list(self.attachments)

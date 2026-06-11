@@ -9,6 +9,12 @@ VISION_IMAGE_MAX_SIZE = 768
 VISION_IMAGE_JPEG_QUALITY = 85
 OLLAMA_REQUEST_TIMEOUT_SECONDS = 60
 
+# Seuils d'évaluation du risque vision/VRAM
+VISION_IMAGE_LARGE_THRESHOLD_PX = 600        # Seuil en pixels de la dimension max pour considérer une image comme grande
+VISION_MODEL_HEAVY_THRESHOLD_RATIO = 0.90    # Ratio taille_modèle/VRAM pour considérer le modèle comme lourd
+VISION_HIGH_RISK_RATIO_THRESHOLD = 1.35      # Ratio total/VRAM au-delà duquel on est en risque élevé
+VISION_LOW_VRAM_THRESHOLD_GB = 4.0           # Seuil de VRAM considérée comme faible
+
 
 # Le prompt système définit la "personnalité" de l'IA et ses règles de sécurité.
 SYSTEM_PROMPT = """Tu es {name}, une IA performante et amicale, agissant comme un agent de codage local.

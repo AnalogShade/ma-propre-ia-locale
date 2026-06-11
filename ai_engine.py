@@ -2,7 +2,11 @@ import sys
 import os
 import subprocess
 import ollama
-from config import MODEL_NAME, SYSTEM_PROMPT, DEFAULT_NAME, log_diagnostic
+from config import (
+    MODEL_NAME, SYSTEM_PROMPT, DEFAULT_NAME, log_diagnostic,
+    VISION_IMAGE_LARGE_THRESHOLD_PX, VISION_MODEL_HEAVY_THRESHOLD_RATIO,
+    VISION_HIGH_RISK_RATIO_THRESHOLD, VISION_LOW_VRAM_THRESHOLD_GB
+)
 
 def _safe_print(text):
     try:
@@ -36,6 +40,13 @@ class AIEngine:
             # 1. Vérification dans 'capabilities'
             capabilities = info.get('capabilities', [])
             if 'vision' in capabilities:
+                # Vérification pour gemma4 : gemma4:latest n'a pas de projecteur CLIP (1 seul FROM),
+                # alors que gemma4:12b en a un (2 FROM dans son modelfile).
+                if 'gemma4' in model_name.lower():
+                    modelfile = info.get('modelfile', '')
+                    from_lines = [line for line in modelfile.splitlines() if line.strip().startswith('FROM') and not line.strip().startswith('#')]
+                    if len(from_lines) < 2:
+                        return False
                 return True
             # 2. Vérification dans 'details' / 'families'
             details = info.get('details', {})
@@ -49,7 +60,7 @@ class AIEngine:
             
         # Fallback sémantique UNIQUEMENT si l'appel Ollama échoue
         model_lower = model_name.lower()
-        known_vision_keywords = ['gemma4', 'llava', 'vision', 'paligemma', 'minicpm-v', 'bakllava', 'llama3.2-vision']
+        known_vision_keywords = ['gemma4:12b', 'llava', 'vision', 'paligemma', 'minicpm-v', 'bakllava', 'llama3.2-vision']
         return any(k in model_lower for k in known_vision_keywords)
 
     def get_gpu_vram(self):
@@ -102,22 +113,56 @@ class AIEngine:
             log_diagnostic(f"[DIAGNOSTIC ENGINE WARNING] Impossible d'obtenir la taille du modèle {model_name} : {e}")
         return None
 
-    def evaluate_request_risk(self, model_name, has_image):
+    def estimate_image_vision_cost_gb(self, width, height):
+        """
+        Calcule une pénalité indicative (coût VRAM en Go) pour une image donnée
+        selon son nombre de pixels.
+        """
+        if not width or not height or width <= 0 or height <= 0:
+            return 0.35 # Valeur moyenne par défaut en cas de dimensions invalides
+            
+        pixels = width * height
+        if pixels <= 128 * 128:
+            return 0.05
+        elif pixels <= 384 * 384:
+            return 0.15
+        elif pixels <= 768 * 768:
+            return 0.35
+        else:
+            return 0.75
+
+    def evaluate_request_risk(self, model_name, image_infos=None, has_image=None):
         """
         Évalue le risque de lenteur ou d'échec pour la requête actuelle.
         Retourne un dictionnaire contenant le niveau de risque et les détails.
         """
+        # Assurer la compatibilité ascendante avec has_image
+        if has_image is not None and image_infos is None:
+            if has_image:
+                # 768x768 par défaut si on sait seulement qu'il y a une image
+                image_infos = [{"width": 768, "height": 768, "file_size_kb": 100.0}]
+            else:
+                image_infos = []
+                
+        if isinstance(image_infos, bool):
+            if image_infos:
+                image_infos = [{"width": 768, "height": 768, "file_size_kb": 100.0}]
+            else:
+                image_infos = []
+
         result = {
             "level": "low_risk",
             "reason": "La configuration matérielle et le modèle semblent adaptés pour un traitement rapide.",
             "model_size_gb": None,
             "gpu_vram_gb": None,
-            "image_extra_estimate_gb": 1.5,
+            "image_cost_gb": 0.0,
+            "image_extra_estimate_gb": 0.0, # Pour compatibilité descendante
+            "ratio": 0.0,
             "confidence": "high"
         }
         
-        # 1. Si aucune image n'est envoyée, le risque est faible
-        if not has_image:
+        image_count = len(image_infos) if image_infos else 0
+        if image_count == 0:
             return result
             
         gpu_vram = self.get_gpu_vram()
@@ -126,26 +171,105 @@ class AIEngine:
         result["gpu_vram_gb"] = gpu_vram
         result["model_size_gb"] = model_size
         
-        # 2. Si les infos ne peuvent pas être obtenues, on renvoie moderate_risk avec une confiance faible
         if gpu_vram is None or model_size is None:
             result["level"] = "moderate_risk"
             result["confidence"] = "low"
             result["reason"] = "Impossible de détecter précisément la VRAM ou la taille du modèle installé. Risque modéré par défaut."
+            # Logs diagnostics même en cas d'incertitude
+            log_diagnostic(
+                f"Vision risk:\n"
+                f"model_size_gb={model_size}\n"
+                f"gpu_vram_gb={gpu_vram}\n"
+                f"image_count={image_count}\n"
+                f"level=moderate_risk\n"
+                f"reason={result['reason']}"
+            )
             return result
             
-        # 3. Calcul heuristique du risque avec les deux infos disponibles
-        total_estimated_needed = model_size + result["image_extra_estimate_gb"]
+        # 1. Calcul du coût total estimé pour l'ensemble des images (somme simple)
+        image_cost_gb = sum(self.estimate_image_vision_cost_gb(img.get("width"), img.get("height")) for img in image_infos)
+        result["image_cost_gb"] = image_cost_gb
+        result["image_extra_estimate_gb"] = image_cost_gb
         
-        if total_estimated_needed > gpu_vram:
-            result["level"] = "high_risk"
-            result["reason"] = f"La taille estimée du modèle installé ({model_size:.1f} Go) avec la surcharge d'image ({result['image_extra_estimate_gb']:.1f} Go) est supérieure à la VRAM détectée ({gpu_vram:.1f} Go)."
-        elif total_estimated_needed > gpu_vram * 0.75:
-            result["level"] = "moderate_risk"
-            result["reason"] = f"La taille estimée du modèle installé ({model_size:.1f} Go) approche de la limite de la VRAM totale détectée ({gpu_vram:.1f} Go). Un ralentissement modéré est possible."
-        else:
-            result["level"] = "low_risk"
-            result["reason"] = f"La taille estimée du modèle installé ({model_size:.1f} Go) et la surcharge d'image tiennent dans la VRAM totale détectée ({gpu_vram:.1f} Go)."
+        # 2. Calcul du ratio
+        ratio = (model_size + image_cost_gb) / gpu_vram
+        
+        # Pénalité si VRAM très faible (augmente virtuellement le ratio)
+        is_low_vram = gpu_vram <= VISION_LOW_VRAM_THRESHOLD_GB
+        if is_low_vram:
+            ratio += 0.15
             
+        result["ratio"] = ratio
+        
+        # 3. Indicateurs de sévérité
+        is_model_heavy = model_size >= gpu_vram * VISION_MODEL_HEAVY_THRESHOLD_RATIO
+        
+        has_large_image = False
+        medium_large_images_count = 0
+        for img in image_infos:
+            w = img.get("width", 0) or 0
+            h = img.get("height", 0) or 0
+            if max(w, h) >= VISION_IMAGE_LARGE_THRESHOLD_PX:
+                has_large_image = True
+            if w * h > 128 * 128:
+                medium_large_images_count += 1
+                
+        # 4. Évaluation du niveau de risque de base
+        if ratio < 0.90:
+            level = "low_risk"
+        elif ratio < VISION_HIGH_RISK_RATIO_THRESHOLD:
+            level = "moderate_risk"
+        else:
+            level = "high_risk"
+            
+        # 5. Escalades de sévérité vers high_risk
+        escalated = False
+        escalation_reason = ""
+        
+        if ratio >= VISION_HIGH_RISK_RATIO_THRESHOLD:
+            escalated = True
+            escalation_reason = f"Le ratio taille estimée/VRAM est critique ({ratio:.2f})."
+        elif medium_large_images_count >= 2 and is_model_heavy:
+            escalated = True
+            escalation_reason = f"Plusieurs images moyennes/grandes ({medium_large_images_count}) envoyées avec un modèle déjà lourd."
+        elif has_large_image and is_model_heavy:
+            escalated = True
+            escalation_reason = "Grande image (proche de 768x768) envoyée avec un modèle déjà lourd."
+        elif is_low_vram and (is_model_heavy or medium_large_images_count >= 1):
+            escalated = True
+            escalation_reason = f"VRAM faible ({gpu_vram:.1f} Go) avec modèle lourd ou image moyenne/grande."
+            
+        if escalated:
+            level = "high_risk"
+            reason = escalation_reason
+        else:
+            if level == "moderate_risk":
+                if is_model_heavy:
+                    reason = "Modèle légèrement supérieur à la VRAM détectée, mais image très petite."
+                else:
+                    reason = f"La taille combinée du modèle ({model_size:.1f} Go) et de l'image ({image_cost_gb:.2f} Go) approche de la limite de la VRAM ({gpu_vram:.1f} Go)."
+            else:
+                reason = "La configuration matérielle et le modèle semblent adaptés pour un traitement rapide."
+                
+        result["level"] = level
+        result["reason"] = reason
+        
+        # 6. Écriture des diagnostics dans les logs
+        images_str = ", ".join([f"{img.get('width')}x{img.get('height')}" for img in image_infos])
+        temp_sizes_str = ", ".join([f"{img.get('file_size_kb'):.1f} KB" if img.get('file_size_kb') is not None else "Inconnue" for img in image_infos])
+        
+        log_diagnostic(
+            f"Vision risk:\n"
+            f"model_size_gb={model_size:.2f}\n"
+            f"gpu_vram_gb={gpu_vram:.2f}\n"
+            f"image={images_str}\n"
+            f"temp_file_size={temp_sizes_str}\n"
+            f"image_cost_gb={image_cost_gb:.2f}\n"
+            f"ratio={ratio:.2f}\n"
+            f"level={level}\n"
+            f"reason={reason}"
+        )
+        
         return result
 
     def get_installed_models(self):
