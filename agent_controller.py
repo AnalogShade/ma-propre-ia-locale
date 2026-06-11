@@ -261,7 +261,7 @@ Règles strictes :
             
         return {"handled": True, "action": "unknown", "message": f"Commande slash inconnue : {cmd}"}
 
-    def process_user_message_sync(self, user_input, images=None, chunk_callback=None, status_callback=None):
+    def process_user_message_sync(self, user_input, images=None, chunk_callback=None, status_callback=None, on_start_callback=None):
         """
         Traite un message utilisateur en langage naturel de manière synchrone.
         Retourne un dictionnaire unifié contenant les résultats IA et système.
@@ -380,7 +380,8 @@ Règles strictes :
             files_context=files_context,
             compressed_context=compressed_context,
             chunk_callback=chunk_callback,
-            status_callback=status_callback
+            status_callback=status_callback,
+            on_start_callback=on_start_callback
         )
         
         if status_callback:

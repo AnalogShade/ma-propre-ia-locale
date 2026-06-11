@@ -1,6 +1,7 @@
 import os
 import uuid
 from PIL import Image
+from config import VISION_IMAGE_MAX_SIZE, VISION_IMAGE_JPEG_QUALITY
 
 class Attachment:
     """
@@ -43,17 +44,31 @@ class ImageAttachment(Attachment):
 
     def prepare_for_api(self, target_dir: str) -> str:
         """
-        Sauvegarde temporairement l'image dans target_dir sous forme de fichier PNG 
+        Sauvegarde temporairement l'image dans target_dir sous forme de fichier JPEG (redimensionné et optimisé)
         pour qu'elle puisse être transmise à l'API Ollama via un chemin absolu.
         """
         if self.temp_path and os.path.exists(self.temp_path):
             return self.temp_path
 
         os.makedirs(target_dir, exist_ok=True)
-        self.temp_path = os.path.abspath(os.path.join(target_dir, f"temp_{self.id}.png"))
+        self.temp_path = os.path.abspath(os.path.join(target_dir, f"temp_{self.id}.jpg"))
         
-        # Sauvegarder l'image PIL en PNG
-        self.image.save(self.temp_path, "PNG")
+        # Redimensionnement si nécessaire (conservation du ratio)
+        width, height = self.image.size
+        max_size = VISION_IMAGE_MAX_SIZE
+        if max(width, height) > max_size:
+            if width > height:
+                new_width = max_size
+                new_height = int(height * (max_size / width))
+            else:
+                new_height = max_size
+                new_width = int(width * (max_size / height))
+            resized_image = self.image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        else:
+            resized_image = self.image
+
+        # Sauvegarder au format JPEG (qualité configurable, conversion en RGB nécessaire si RGBA/palette)
+        resized_image.convert("RGB").save(self.temp_path, "JPEG", quality=VISION_IMAGE_JPEG_QUALITY)
         return self.temp_path
 
     def clean(self):

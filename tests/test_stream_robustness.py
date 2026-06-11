@@ -12,14 +12,16 @@ class TestStreamRobustness(unittest.TestCase):
         self.engine = AIEngine()
         self.ctrl = AgentController()
 
-    @patch('ollama.chat')
-    def test_normal_streaming(self, mock_chat):
+    @patch('ollama.Client')
+    def test_normal_streaming(self, mock_client_class):
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
         mock_chunks = [
             {'message': {'content': 'Hello'}},
             {'message': {'content': ' world'}},
             {'message': {'content': '!'}}
         ]
-        mock_chat.return_value = mock_chunks
+        mock_client.chat.return_value = mock_chunks
 
         received_chunks = []
         received_status = []
@@ -40,15 +42,17 @@ class TestStreamRobustness(unittest.TestCase):
         self.assertEqual(received_chunks, ["Hello", " world", "!"])
         self.assertIn("Envoi au modèle...", received_status)
 
-    @patch('ollama.chat')
-    def test_streaming_fallback_on_exception(self, mock_chat):
+    @patch('ollama.Client')
+    def test_streaming_fallback_on_exception(self, mock_client_class):
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
         def side_effect(*args, **kwargs):
             if kwargs.get('stream'):
                 raise RuntimeError("Stream failed")
             else:
                 return {'message': {'content': 'Hello sync world!'}}
 
-        mock_chat.side_effect = side_effect
+        mock_client.chat.side_effect = side_effect
 
         received_chunks = []
         received_status = []
@@ -92,14 +96,19 @@ class TestStreamRobustness(unittest.TestCase):
         self.assertEqual(think, "")
         self.assertEqual(final, "abcghi")
 
+    @patch('ollama.Client')
     @patch('ollama.chat')
-    def test_controller_response_cleaning(self, mock_chat):
+    def test_controller_response_cleaning(self, mock_chat, mock_client_class):
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
         # Setup mock return response with think tags
-        mock_chat.return_value = {
+        mock_response = {
             'message': {
                 'content': '<think>I am thinking about code.</think>FILE: main.py\n<<<<<<< CREATE\nprint("hi")\n>>>>>>> CREATE'
             }
         }
+        mock_client.chat.return_value = mock_response
+        mock_chat.return_value = mock_response
         
         # Clear memory messages before test
         self.ctrl.memory.clear()
@@ -121,14 +130,16 @@ class TestStreamRobustness(unittest.TestCase):
         self.assertEqual(len(result.get("create_blocks")), 1)
         self.assertEqual(result.get("create_blocks")[0]["file_path"], "main.py")
 
-    @patch('ollama.chat')
-    def test_native_thinking_stream(self, mock_chat):
+    @patch('ollama.Client')
+    def test_native_thinking_stream(self, mock_client_class):
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
         mock_chunks = [
             {'message': {'thinking': 'Thinking'}},
             {'message': {'thinking': ' process'}},
             {'message': {'content': 'Final response'}}
         ]
-        mock_chat.return_value = mock_chunks
+        mock_client.chat.return_value = mock_chunks
 
         received_chunks = []
 

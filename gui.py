@@ -697,7 +697,7 @@ class AnnaGUI:
         if not self.ctrl.engine.does_model_support_vision(active_model):
             # Avertir l'utilisateur de manière non bloquante
             self.update_status("Erreur : Le modèle actif ne supporte pas la vision.", active=True)
-            self.append_chat("Système", f"⚠️ Le modèle sélectionné ({active_model}) ne supporte pas les images. Veuillez basculer vers gemma4 ou un autre modèle vision.")
+            self.append_chat("Système", f"⚠️ Le modèle sélectionné ({active_model}) ne supporte pas les images. Veuillez basculer vers llama3.2-vision ou un autre modèle vision.")
             return "break" # Intercepter pour empêcher Tkinter de coller des débris textuels
             
         # 4. Le modèle est compatible, on ajoute la pièce jointe
@@ -827,32 +827,71 @@ Note : Shift + Entrée pour un saut de ligne."""
         if not msg and not self.attachments:
             return
 
-        self.user_input.delete("1.0", tk.END)
-        
-        # Affichage immédiat du message de l'utilisateur pour un ordre naturel
-        if msg:
-            self.append_chat("Vous", msg)
-        else:
-            self.append_chat("Vous", "[Image jointe]")
+        # 1. Vérifier la présence d'images
+        has_image = any(att.get_type() == "image" for att in self.attachments)
 
-        # Préparer et afficher les images dans la zone de chat
+        # 2. Injection texte par défaut si image présente et texte vide
+        final_msg = msg
+        if has_image and not msg:
+            final_msg = "Décris précisément l'image jointe."
+
+        # 3. Vérifier le support vision
+        active_model = self.ctrl.engine.model
+        if has_image:
+            if not self.ctrl.engine.does_model_support_vision(active_model):
+                self.update_status("Erreur : Le modèle actif ne supporte pas la vision.", active=True)
+                self.append_chat("Système", f"⚠️ Le modèle sélectionné ({active_model}) ne supporte pas les images. Veuillez basculer vers llama3.2-vision ou un autre modèle vision.")
+                return
+
+        # 4. Préparer/redimensionner/comprimer l'image
         image_paths = []
-        attachments_to_clean = list(self.attachments)
-        
         for att in self.attachments:
             if att.get_type() == "image":
-                # Afficher dans le chat
-                self.append_chat_image(att.image)
-                # Sauvegarder dans data/attachments/ pour l'API Ollama
-                path = att.prepare_for_api("data/attachments")
-                image_paths.append(path)
-                
-        # Vider la barre de miniatures de l'interface immédiatement
-        self.attachments = []
-        self.update_attachments_ui()
+                try:
+                    path = att.prepare_for_api("data/attachments")
+                    image_paths.append(path)
+                except Exception as prep_err:
+                    self.append_chat("Système", f"⚠️ Erreur de préparation d'image : {prep_err}")
+                    return
 
-        # Gestion des commandes spéciales (Fichiers)
+        # 5. Évaluer le risque avec evaluate_request_risk
+        risk_analysis = self.ctrl.engine.evaluate_request_risk(active_model, has_image)
+        risk_level = risk_analysis.get("level", "low_risk")
+
+        # 6. Si high_risk, demander confirmation de manière non-destructrice
+        if has_image and risk_level == "high_risk":
+            model_size = risk_analysis.get("model_size_gb")
+            gpu_vram = risk_analysis.get("gpu_vram_gb")
+            model_size_str = f"{model_size:.1f}" if model_size is not None else "Inconnu"
+            gpu_vram_str = f"{gpu_vram:.1f}" if gpu_vram is not None else "Inconnu"
+            
+            prompt_text = (
+                "La taille estimée du modèle est supérieure à la VRAM détectée. L'analyse d'image pourrait être très lente, "
+                "échouer, ou faire travailler fortement votre ordinateur.\n\n"
+                f"Modèle actif : {active_model}\n"
+                f"Taille estimée du modèle : {model_size_str} Go\n"
+                f"VRAM détectée : {gpu_vram_str} Go\n\n"
+                "Voulez-vous quand même continuer ?"
+            )
+            confirm = messagebox.askyesno("⚠️ Avertissement de performance", prompt_text)
+            if not confirm:
+                # L'utilisateur annule : on ne touche à rien
+                return
+        
+        # 7. Si moderate_risk, mettre à jour le statut
+        if has_image and risk_level == "moderate_risk":
+            self.update_status("⚠️ Modèle lourd : calcul lent à prévoir...", active=True)
+
+        # 8. Sauvegarder les pièces jointes à nettoyer
+        attachments_to_clean = list(self.attachments)
+
+        # 9. Gestion des commandes spéciales (Fichiers)
         if msg.startswith('/'):
+            # Vider la zone de saisie et miniatures pour les commandes slash
+            self.user_input.delete("1.0", tk.END)
+            self.attachments = []
+            self.update_attachments_ui()
+            
             slash_result = self.ctrl.process_slash_command(msg)
             if slash_result:
                 if slash_result.get("action") == "help":
@@ -870,14 +909,25 @@ Note : Shift + Entrée pour un saut de ligne."""
             self.show_progress_block()
             threading.Thread(target=self._poll_sd_progress_thread, daemon=True).start()
 
+        # 10. Diagnostics dans les logs
+        from config import log_diagnostic
+        log_diagnostic(
+            f"[DIAGNOSTIC ENVOI]\n"
+            f"  Modèle actif             : {active_model}\n"
+            f"  Présence d'images        : {has_image} ({len(image_paths)} images)\n"
+            f"  Texte final envoyé       : {repr(final_msg)}\n"
+            f"  Chemins temporaires      : {image_paths}\n"
+            f"  Évaluation du risque     : {risk_level} ({risk_analysis.get('reason')})\n"
+        )
+
         # Marquer la génération comme active et désactiver la saisie
         self.generating = True
         self.set_input_state(False)
 
         # Lancer le traitement dans un thread pour ne pas geler l'interface
-        threading.Thread(target=self.process_ai_response, args=(msg, image_paths, attachments_to_clean), daemon=True).start()
+        threading.Thread(target=self.process_ai_response, args=(final_msg, image_paths, attachments_to_clean, msg), daemon=True).start()
 
-    def process_ai_response(self, user_input, images=None, attachments_to_clean=None):
+    def process_ai_response(self, user_input, images=None, attachments_to_clean=None, original_msg=""):
         print(f"\n[DIAGNOSTIC] RAW USER MESSAGE:\n{user_input}\n")
         
         self.is_streamed = False
@@ -890,6 +940,32 @@ Note : Shift + Entrée pour un saut de ligne."""
         
         assistant_name = self.memory.assistant_profile.get("nom", "Anna")
         
+        # Callback to clear UI inputs and display user message once the Ollama request starts
+        has_started_ui = [False]
+        def on_start_callback():
+            if has_started_ui[0]:
+                return
+            has_started_ui[0] = True
+            
+            def do_start():
+                # Affichage dans le chat
+                if original_msg:
+                    self.append_chat("Vous", original_msg)
+                else:
+                    self.append_chat("Vous", "[Image jointe]")
+
+                if attachments_to_clean:
+                    for att in attachments_to_clean:
+                        if att.get_type() == "image":
+                            self.append_chat_image(att.image)
+
+                # Vider la zone de saisie et miniatures
+                self.user_input.delete("1.0", tk.END)
+                self.attachments = []
+                self.update_attachments_ui()
+                
+            self.root.after(0, do_start)
+
         # Callbacks thread-safe via lambda/root.after
         def chunk_callback(chunk):
             def handle_chunk():
@@ -906,7 +982,8 @@ Note : Shift + Entrée pour un saut de ligne."""
                 user_input, 
                 images=images,
                 chunk_callback=chunk_callback,
-                status_callback=status_callback
+                status_callback=status_callback,
+                on_start_callback=on_start_callback
             )
             
             def display_response_and_diffs():
@@ -919,6 +996,12 @@ Note : Shift + Entrée pour un saut de ligne."""
                 self.remove_progress_block()
                 
                 res_type = result.get("type")
+                
+                # S'assurer que l'UI est mise à jour (vidée) si la requête a réussi (ou s'est terminée normalement)
+                # mais que on_start_callback n'a pas été appelé (ex: intent router sans Ollama)
+                if res_type != "error":
+                    on_start_callback()
+                
                 assistant_name = self.memory.assistant_profile.get("nom", "Anna")
                 
                 # --- INTERCEPTION MODE DE GÉNÉRATION D'IMAGES (TÂCHE 8) ---
@@ -980,12 +1063,35 @@ Note : Shift + Entrée pour un saut de ligne."""
                         
             self.root.after(0, display_response_and_diffs)
         except Exception as e:
-            print(f"[GUI ERROR] Crash dans le traitement de l'IA : {e}")
-            self.root.after(0, lambda: self.show_error_block("ERREUR INTERNE", f"Une erreur s'est produite lors du traitement : {e}"))
-            self.root.after(0, lambda: self.set_input_state(True))
-            self.root.after(0, lambda: self.update_status("Prêt", active=False))
+            # Vérifier si c'est un timeout d'Ollama (httpx.TimeoutException ou message contenant "timeout")
+            is_timeout = False
+            try:
+                import httpx
+                if isinstance(e, httpx.TimeoutException):
+                    is_timeout = True
+            except ImportError:
+                pass
+            
+            if not is_timeout and "timeout" in str(e).lower():
+                is_timeout = True
+                
+            if is_timeout:
+                # Gestion propre du timeout : libérer l'état GUI et informer l'utilisateur
+                def handle_timeout():
+                    self.generating = False
+                    self.set_input_state(True)
+                    self.update_status("Prêt", active=False)
+                    self.sd_generating = False
+                    self.remove_progress_block()
+                    self.append_chat("Système", "⚠️ L'analyse d'image a pris trop de temps ou Ollama ne répond plus. Vous pouvez réessayer avec une image plus petite ou un modèle vision plus léger.")
+                self.root.after(0, handle_timeout)
+            else:
+                print(f"[GUI ERROR] Crash dans le traitement de l'IA : {e}")
+                self.root.after(0, lambda: self.show_error_block("ERREUR INTERNE", f"Une erreur s'est produite lors du traitement : {e}"))
+                self.root.after(0, lambda: self.set_input_state(True))
+                self.root.after(0, lambda: self.update_status("Prêt", active=False))
         finally:
-            if attachments_to_clean:
+            if attachments_to_clean and has_started_ui[0]:
                 for att in attachments_to_clean:
                     try:
                         att.clean()

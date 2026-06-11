@@ -4,6 +4,12 @@ DEFAULT_MODEL_NAME = "llama3"
 MODEL_NAME = DEFAULT_MODEL_NAME  # Rétrocompatibilité des imports existants
 DEFAULT_NAME = "Antis"
 
+# Configuration de la vision et de la gestion de performance
+VISION_IMAGE_MAX_SIZE = 768
+VISION_IMAGE_JPEG_QUALITY = 85
+OLLAMA_REQUEST_TIMEOUT_SECONDS = 60
+
+
 # Le prompt système définit la "personnalité" de l'IA et ses règles de sécurité.
 SYSTEM_PROMPT = """Tu es {name}, une IA performante et amicale, agissant comme un agent de codage local.
 
