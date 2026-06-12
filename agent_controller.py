@@ -314,6 +314,12 @@ Règles strictes :
                             intent_result["message"] = loaded_msg
                             intent_result["system_context"] = f"[SUCCÈS] {loaded_msg}"
                             print(f"  [SAFETY PIPELINE] {loaded_msg}")
+                        else:
+                            print(f"  [SAFETY PIPELINE] Aucun fichier n'a pu être chargé parmi les cibles : {targets}")
+                    else:
+                        print(f"  [SAFETY PIPELINE] Pas de chargement automatique (action: load_context, confiance insuffisante: {confidence:.2f}, raison: {reason})")
+                else:
+                    print(f"  [SAFETY PIPELINE] Pas de chargement automatique (action: none, raison: {resolution.get('reason', 'Aucune')})")
             
         # 3. Vérification garde-fou : besoin d'un répertoire de travail actif ou d'un fichier pour certaines requêtes sémantiques détectées
         file_actions_requiring_workspace = ["load_context", "close_file", "reload_file", "open_file"]
@@ -448,6 +454,10 @@ Règles strictes :
         # Première analyse des propositions de modifications de fichiers
         create_blocks = self.editor.parse_create_blocks(clean_response)
         edit_blocks = self.editor.parse_search_replace_blocks(clean_response)
+        print(f"  [PATCH DETECTION] Blocs détectés dans la réponse : {len(create_blocks)} création(s), {len(edit_blocks)} modification(s)")
+        for block in edit_blocks:
+            status = "INVALID" if block.get("invalid") else "VALID"
+            print(f"  [PATCH VALIDATION] Bloc modification pour '{block['file_path']}' - Statut : {status}")
 
         # Boucle de correction automatique (max 1 tentative)
         has_invalid = any(block.get("invalid") for block in edit_blocks)
@@ -503,6 +513,10 @@ Règles strictes :
                 # Ré-analyser les blocs à partir de la réponse corrigée
                 create_blocks = self.editor.parse_create_blocks(clean_response)
                 edit_blocks = self.editor.parse_search_replace_blocks(clean_response)
+                print(f"  [PATCH DETECTION] Blocs après correction automatique : {len(create_blocks)} création(s), {len(edit_blocks)} modification(s)")
+                for block in edit_blocks:
+                    status = "INVALID" if block.get("invalid") else "VALID"
+                    print(f"  [PATCH VALIDATION] Bloc modification pour '{block['file_path']}' - Statut : {status}")
 
         # Enregistrement de la réponse propre (et corrigée le cas échéant) dans l'historique
         self.memory.add_message("assistant", clean_response)

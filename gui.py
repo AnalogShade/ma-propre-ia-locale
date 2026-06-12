@@ -1538,6 +1538,7 @@ Note : Shift + Entrée pour un saut de ligne."""
                     block_state["status"] = "failed"
                     error_status_label.config(text=f"⚠ {msg}")
                     error_status_label.pack(fill="x", pady=(0, 5))
+                print(f"  [EDITOR ACTION] Création du fichier '{file_path}' - Résultat : {'SUCCÈS' if success else 'ÉCHEC'} ({msg})")
             else:
                 from pathlib import Path
                 if not Path(file_path).is_absolute() and self.files.working_dir:
@@ -1554,6 +1555,7 @@ Note : Shift + Entrée pour un saut de ligne."""
                     block_state["status"] = "failed"
                     error_status_label.config(text=f"⚠ {msg}")
                     error_status_label.pack(fill="x", pady=(0, 5))
+                print(f"  [EDITOR ACTION] Modification du fichier '{file_path}' - Résultat : {'SUCCÈS' if success else 'ÉCHEC'} ({msg})")
             
             update_ui_for_status()
             if on_state_change:
@@ -1571,8 +1573,10 @@ Note : Shift + Entrée pour un saut de ligne."""
                 btn_cancel.config(state="disabled")
             if invalid:
                 self.append_chat("Système", f"Signalement de '{file_path}' ignoré.")
+                print(f"  [EDITOR ACTION] Signalement du patch invalide sur '{file_path}' ignoré par l'utilisateur.")
             else:
                 self.append_chat("Système", f"Modification de '{file_path}' annulée.")
+                print(f"  [EDITOR ACTION] Modification sur '{file_path}' annulée par l'utilisateur.")
             
             update_ui_for_status()
             if on_state_change:
