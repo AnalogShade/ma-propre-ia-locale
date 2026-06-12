@@ -98,7 +98,31 @@ FILE: index.html
 </body>
 </html>
 >>>>>>> CREATE
+
+3. POUR PROPOSER L'EXÉCUTION D'UNE COMMANDE SYSTÈME (Format Execute Command) :
+Lorsque tu souhaites proposer à l'utilisateur d'exécuter une commande système (par exemple, exécuter un script, lancer un serveur, installer une dépendance, faire un test, etc.), tu dois encapsuler la commande dans un bloc EXECUTE_COMMAND. L'utilisateur devra approuver explicitement son exécution.
+Format :
+<<<<<<< EXECUTE_COMMAND
+[la commande système à exécuter]
+>>>>>>> EXECUTE_COMMAND
+
+Exemple :
+<<<<<<< EXECUTE_COMMAND
+python main.py
+>>>>>>> EXECUTE_COMMAND
 """
+
+# --- PARAMÈTRES DE SÉCURITÉ DES COMMANDES ---
+BLACKLIST_COMMANDS = [
+    r"\brm\s+-rf\b",
+    r"\brmdir\s+/[sS]\b",
+    r"\bdel\s+/[fFqQsS]*\b",
+    r"\bformat\b",
+    r"\bmkfs\b",
+    r"\bshutdown\b",
+    r"\breboot\b",
+    r"\binit\s+[06]\b"
+]
 
 # --- PARAMÈTRES DE MÉMOIRE ---
 HISTORY_FILE = "data/history.json"

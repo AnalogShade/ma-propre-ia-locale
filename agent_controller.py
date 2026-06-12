@@ -15,6 +15,7 @@ from intent_router import IntentRouter
 from code_editor import CodeEditor
 from image_generation_manager import ImageGenerationManager
 from memory_retriever import MemoryRetriever
+from command_runner import CommandRunner
 
 class AgentController:
     def __init__(self):
@@ -27,6 +28,7 @@ class AgentController:
         - Gestion de fichiers et contexte (FileManager)
         - Routeur d'intentions sémantiques (IntentRouter)
         - Éditeur de code sécurisé (CodeEditor)
+        - Exécuteur de commandes (CommandRunner)
         """
         # 1. Chargement et configuration des réglages
         self.settings = SettingsManager(SETTINGS_FILE)
@@ -44,6 +46,7 @@ class AgentController:
         
         self.editor = CodeEditor()
         self.retriever = MemoryRetriever()
+        self.command_runner = CommandRunner(self)
         
         # 3. Initialisation du gestionnaire de génération d'images (MVC)
         self.image_manager = ImageGenerationManager(self.engine)
@@ -518,6 +521,18 @@ Règles strictes :
                     status = "INVALID" if block.get("invalid") else "VALID"
                     print(f"  [PATCH VALIDATION] Bloc modification pour '{block['file_path']}' - Statut : {status}")
 
+        # Détection des propositions de commandes système
+        command_blocks = self.command_runner.parse_command_blocks(clean_response)
+        for block in command_blocks:
+            is_valid, err_msg = self.command_runner.validate_command(block["command"], self.files.working_dir)
+            block["invalid"] = not is_valid
+            block["error_message"] = err_msg
+            
+        print(f"  [COMMAND DETECTION] Blocs commande détectés : {len(command_blocks)}")
+        for block in command_blocks:
+            status = "INVALID" if block.get("invalid") else "VALID"
+            print(f"  [COMMAND VALIDATION] Commande '{block['command']}' - Statut : {status}")
+
         # Enregistrement de la réponse propre (et corrigée le cas échéant) dans l'historique
         self.memory.add_message("assistant", clean_response)
         
@@ -535,5 +550,42 @@ Règles strictes :
             "emotion": emotion,
             "create_blocks": create_blocks,
             "edit_blocks": edit_blocks,
+            "command_blocks": command_blocks,
             "system_notification": intent_result.get("message") if intent_result.get("action") == "load_context" else None
         }
+
+    def inject_execution_result_to_history(self, command, return_code, stdout_excerpt, stderr_excerpt, is_cancelled):
+        """
+        Injecte le résultat formaté de l'exécution d'une commande système dans l'historique de conversation (mémoire).
+        """
+        if is_cancelled:
+            msg = (
+                f"[SYSTÈME] Commande exécutée : {command}\n"
+                f"Statut : arrêtée par l'utilisateur\n"
+            )
+            if stdout_excerpt:
+                msg += f"Sortie stdout :\n{stdout_excerpt}\n"
+            if stderr_excerpt:
+                msg += f"Sortie stderr :\n{stderr_excerpt}\n"
+        elif return_code == 0:
+            msg = (
+                f"[SYSTÈME] Commande exécutée : {command}\n"
+                f"Code de retour : {return_code}\n"
+                f"Statut : succès\n"
+            )
+            if stdout_excerpt:
+                msg += f"Sortie stdout :\n{stdout_excerpt}\n"
+        else:
+            msg = (
+                f"[SYSTÈME] Commande exécutée : {command}\n"
+                f"Code de retour : {return_code}\n"
+                f"Statut : échec\n"
+            )
+            if stderr_excerpt:
+                msg += f"Erreur stderr :\n{stderr_excerpt}\n"
+            elif stdout_excerpt:
+                # Au cas où stdout et stderr ont été combinés par le runner
+                msg += f"Sortie console :\n{stdout_excerpt}\n"
+
+        self.memory.add_message("system", msg)
+        print(f"  [SYSTEM MEMORY INJECTION] Résultat d'exécution enregistré pour '{command}' (Code: {return_code})")

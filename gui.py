@@ -1230,23 +1230,32 @@ Note : Shift + Entrée pour un saut de ligne."""
                     
                     create_blocks = result.get("create_blocks", [])
                     edit_blocks = result.get("edit_blocks", [])
+                    command_blocks = result.get("command_blocks", [])
                     
                     all_blocks = []
                     for block in create_blocks:
                         all_blocks.append(("create", block))
                     for block in edit_blocks:
                         all_blocks.append(("edit", block))
+                    for block in command_blocks:
+                        all_blocks.append(("command", block))
                         
                     if len(all_blocks) == 1:
                         # Conserver le comportement d'origine pour un seul bloc
                         b_type, block = all_blocks[0]
                         if b_type == "create":
                             self.show_diff_block(block['file_path'], "create", create_content=block['content'])
-                        else:
+                        elif b_type == "edit":
                             self.show_diff_block(
                                 block['file_path'], "edit", 
                                 search_content=block['search_content'], 
                                 replace_content=block['replace_content'],
+                                invalid=block.get('invalid', False),
+                                error_message=block.get('error_message', "")
+                            )
+                        elif b_type == "command":
+                            self.show_command_block(
+                                block['command'],
                                 invalid=block.get('invalid', False),
                                 error_message=block.get('error_message', "")
                             )
@@ -1281,11 +1290,20 @@ Note : Shift + Entrée pour un saut de ligne."""
                                     pending_list=pending_list,
                                     on_state_change=update_global_buttons
                                 )
-                            else:
+                            elif b_type == "edit":
                                 self.show_diff_block(
                                     block['file_path'], "edit", 
                                     search_content=block['search_content'], 
                                     replace_content=block['replace_content'],
+                                    invalid=block.get('invalid', False),
+                                    error_message=block.get('error_message', ""),
+                                    parent_frame=container_frame,
+                                    pending_list=pending_list,
+                                    on_state_change=update_global_buttons
+                                )
+                            elif b_type == "command":
+                                self.show_command_block(
+                                    block['command'],
                                     invalid=block.get('invalid', False),
                                     error_message=block.get('error_message', ""),
                                     parent_frame=container_frame,
@@ -1612,6 +1630,192 @@ Note : Shift + Entrée pour un saut de ligne."""
             # Insertion en tant que fenêtre en ligne dans la chat_area
             self.chat_area.insert(tk.END, "\n")
             self.chat_area.window_create(tk.END, window=diff_frame)
+            self.chat_area.insert(tk.END, "\n")
+            
+            self.chat_area.config(state='disabled')
+            self.chat_area.yview(tk.END)
+
+    def show_command_block(self, command, invalid=False, error_message="", parent_frame=None, pending_list=None, on_state_change=None):
+        """
+        Crée un cadre Tkinter contenant la commande proposée, des boutons interactifs,
+        et une console de sortie en temps réel après approbation.
+        """
+        # Activer le chat pour insertion
+        if not parent_frame:
+            self.chat_area.config(state='normal')
+        
+        # Création du cadre principal de la Commande
+        if parent_frame:
+            cmd_frame = tk.Frame(parent_frame, bg="#1e1e1e", bd=0, padx=5, pady=5)
+        else:
+            cmd_frame = tk.Frame(self.chat_area, bg="#1e1e1e", highlightbackground="#333333", highlightthickness=1, bd=0, padx=10, pady=10)
+        
+        title_text = "🖥️ COMMANDE SYSTÈME PROPOSÉE"
+        title = tk.Label(cmd_frame, text=title_text, bg="#1e1e1e", fg="#bb86fc", font=("Arial", 10, "bold"), anchor="w")
+        title.pack(fill="x", pady=(0, 5))
+        
+        # Zone de texte montrant la commande
+        cmd_text = tk.Text(cmd_frame, wrap=tk.WORD, font=("Consolas", 10), bg="#2d2d2d", fg="#e0e0e0", bd=0, height=2, width=70)
+        cmd_text.insert(tk.END, command)
+        cmd_text.config(state="disabled")
+        cmd_text.pack(fill="x", pady=5)
+        
+        # Cadre pour les boutons d'approbation
+        btn_frame = tk.Frame(cmd_frame, bg="#1e1e1e")
+        btn_frame.pack(fill="x", pady=(5, 0))
+        
+        # Variables de boutons
+        btn_run = None
+        btn_refuse = None
+        block_state = {"status": "invalid" if invalid else "pending"}
+        
+        # Label d'erreur si la commande est interdite ou le dossier de travail absent
+        error_status_label = tk.Label(btn_frame, text=f"⚠ {error_message}" if invalid else "", bg="#1e1e1e", fg="#ff5555", font=("Arial", 9, "bold"), wraplength=500, justify="left", anchor="w")
+        if invalid:
+            error_status_label.pack(fill="x", pady=(0, 5))
+            
+        # Label de statut visuel (ex: Refusé, En cours..., Terminé (code 0))
+        status_label = tk.Label(btn_frame, text="", bg="#1e1e1e", font=("Arial", 9, "bold"))
+        status_label.pack(side="left", padx=10)
+
+        # Console de sortie (affichée seulement lors de l'exécution)
+        console_frame = tk.Frame(cmd_frame, bg="#1e1e1e")
+        console_text = scrolledtext.ScrolledText(console_frame, wrap=tk.WORD, font=("Consolas", 9), bg="#181818", fg="#80ff80", bd=0, height=6, width=70)
+        console_text.config(state="disabled")
+        
+        btn_stop = None
+        current_pid = [None]  # mutable list wrapper pour stocker l'id de processus
+        
+        def update_ui_for_status():
+            status = block_state["status"]
+            if status == "running":
+                status_label.config(text="● En cours...", fg="#03dac6")
+                if btn_run and btn_run.winfo_exists():
+                    btn_run.pack_forget()
+                if btn_refuse and btn_refuse.winfo_exists():
+                    btn_refuse.pack_forget()
+                console_frame.pack(fill="both", expand=True, pady=5)
+                console_text.pack(fill="both", expand=True, side="left")
+                # Afficher le bouton Arrêter
+                nonlocal btn_stop
+                if not btn_stop:
+                    btn_stop = tk.Button(btn_frame, text="⏹ Arrêter", command=on_stop, bg="#cf6679", fg="black", activebackground="#b00020", relief="flat", font=("Arial", 9, "bold"), padx=15, pady=5)
+                    btn_stop.pack(side="right", padx=5)
+            elif status == "finished":
+                pass
+            elif status == "cancelled":
+                status_label.config(text="✗ Refusée", fg="#888888")
+                if btn_run and btn_run.winfo_exists():
+                    btn_run.config(state="disabled")
+                if btn_refuse and btn_refuse.winfo_exists():
+                    btn_refuse.config(state="disabled")
+            elif status == "invalid":
+                status_label.config(text="⚠ Bloquée (Sécurité)", fg="#ff5555")
+                if btn_run and btn_run.winfo_exists():
+                    btn_run.pack_forget()
+                if btn_refuse and btn_refuse.winfo_exists():
+                    btn_refuse.config(state="disabled")
+
+        def append_console_output(text):
+            # Exécution thread-safe dans le thread Tkinter
+            self.root.after(0, lambda: _safe_append_console(text))
+
+        def _safe_append_console(text):
+            if console_text.winfo_exists():
+                console_text.config(state="normal")
+                console_text.insert(tk.END, text)
+                console_text.config(state="disabled")
+                console_text.yview(tk.END)
+
+        def on_run():
+            if block_state["status"] not in ("pending", "failed"):
+                return False
+                
+            block_state["status"] = "running"
+            update_ui_for_status()
+            if on_state_change:
+                on_state_change()
+                
+            # Log de début d'exécution dans le chat utilisateur
+            self.append_chat("Système", f"Début de l'exécution de la commande : {command}")
+
+            def output_callback(chunk):
+                append_console_output(chunk)
+
+            def completion_callback(return_code, stdout, stderr, is_cancelled):
+                # Enregistrer le résultat dans l'historique du LLM
+                self.ctrl.inject_execution_result_to_history(command, return_code, stdout, stderr, is_cancelled)
+                
+                # Mettre à jour l'UI sur le thread principal
+                def finalize_ui():
+                    if is_cancelled:
+                        block_state["status"] = "finished"
+                        status_label.config(text="⏹ Arrêté", fg="#ff8080")
+                        self.append_chat("Système", f"Commande arrêtée par l'utilisateur.")
+                    elif return_code == 0:
+                        block_state["status"] = "finished"
+                        status_label.config(text="✓ Succès", fg="#80ff80")
+                        self.append_chat("Système", f"Commande exécutée avec succès (code 0).")
+                    else:
+                        block_state["status"] = "finished"
+                        status_label.config(text=f"✗ Échec (code {return_code})", fg="#ff5555")
+                        self.append_chat("Système", f"La commande a échoué (code {return_code}).")
+
+                    if btn_stop and btn_stop.winfo_exists():
+                        btn_stop.pack_forget()
+                    
+                self.root.after(0, finalize_ui)
+
+            pid = self.ctrl.command_runner.execute_async(
+                command,
+                self.files.working_dir,
+                output_callback,
+                completion_callback
+            )
+            current_pid[0] = pid
+            return pid is not None
+
+        def on_stop():
+            if current_pid[0] is not None:
+                self.ctrl.command_runner.stop_process(current_pid[0])
+                if btn_stop and btn_stop.winfo_exists():
+                    btn_stop.config(state="disabled")
+
+        def on_refuse():
+            if block_state["status"] != "pending":
+                return
+            block_state["status"] = "cancelled"
+            update_ui_for_status()
+            self.append_chat("Système", f"Exécution de la commande refusée.")
+            if on_state_change:
+                on_state_change()
+
+        # Configurer les boutons
+        if invalid:
+            btn_refuse = tk.Button(btn_frame, text="✗ Ignorer", command=on_refuse, bg="#444444", fg="white", activebackground="#666666", relief="flat", font=("Arial", 9), padx=15, pady=5)
+            btn_refuse.pack(side="left")
+        else:
+            btn_run = tk.Button(btn_frame, text="✓ Exécuter", command=on_run, bg="#03dac6", fg="black", activebackground="#018786", relief="flat", font=("Arial", 9, "bold"), padx=15, pady=5)
+            btn_run.pack(side="left", padx=(0, 10))
+            
+            btn_refuse = tk.Button(btn_frame, text="✗ Refuser", command=on_refuse, bg="#444444", fg="white", activebackground="#666666", relief="flat", font=("Arial", 9), padx=15, pady=5)
+            btn_refuse.pack(side="left")
+
+        update_ui_for_status()
+
+        if pending_list is not None:
+            pending_list.append({
+                "state": block_state,
+                "apply": on_run,
+                "cancel": on_refuse,
+                "invalid": invalid
+            })
+
+        if parent_frame:
+            cmd_frame.pack(fill="x", pady=5)
+        else:
+            self.chat_area.insert(tk.END, "\n")
+            self.chat_area.window_create(tk.END, window=cmd_frame)
             self.chat_area.insert(tk.END, "\n")
             
             self.chat_area.config(state='disabled')

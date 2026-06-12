@@ -71,65 +71,146 @@ def run_console(ctrl, checker_results=None):
                 response = result.get("content")
                 print(f"\n{assistant_name} ({ctrl.engine.model}) : {response}")
                 
-                # Gestion interactive des modifications de fichiers
+                # Gestion interactive des modifications et commandes
                 create_blocks = result.get("create_blocks", [])
                 edit_blocks = result.get("edit_blocks", [])
+                command_blocks = result.get("command_blocks", [])
                 
-                if create_blocks or edit_blocks:
+                if create_blocks or edit_blocks or command_blocks:
                     from pathlib import Path
-                    print("\n" + "="*50)
-                    print("   PROPOSITIONS DE MODIFICATION DE FICHIERS")
-                    print("="*50)
                     
-                    # Traitement des créations
-                    for block in create_blocks:
-                        print(f"\n[CRÉATION] Fichier ciblé : {block['file_path']}")
-                        print("-" * 40)
-                        print(block['content'])
-                        print("-" * 40)
+                    if create_blocks or edit_blocks:
+                        print("\n" + "="*50)
+                        print("   PROPOSITIONS DE MODIFICATION DE FICHIERS")
+                        print("="*50)
                         
-                        choix = input(f"Créer ce fichier dans le répertoire ? (o/n) : ").strip().lower()
-                        if choix == 'o':
-                            success, msg = ctrl.editor.create_file(block['file_path'], block['content'], working_dir=ctrl.files.working_dir)
-                            print(f"\n[SYSTÈME] {msg}")
-                            if success:
-                                # Recharger le fichier pour qu'il soit dans le contexte IA
-                                ctrl.files.load_file(block['file_path'])
-                        else:
-                            print("\n[SYSTÈME] Création annulée.")
-                            
-                    # Traitement des modifications
-                    for block in edit_blocks:
-                        print(f"\n📂 PROPOSITION DE MODIFICATION DE : {block['file_path']}")
-                        if block.get('invalid'):
-                            print(f"\n[REJETÉ] {block.get('error_message')}")
+                        # Traitement des créations
+                        for block in create_blocks:
+                            print(f"\n[CRÉATION] Fichier ciblé : {block['file_path']}")
                             print("-" * 40)
-                            continue
+                            print(block['content'])
+                            print("-" * 40)
                             
-                        print("-" * 40)
-                        print("<<<<<<< SEARCH")
-                        print(block['search_content'])
-                        print("=======")
-                        print(block['replace_content'])
-                        print(">>>>>>> REPLACE")
-                        print("-" * 40)
-                        
-                        choix = input(f"Appliquer cette modification ? (o/n) : ").strip().lower()
-                        if choix == 'o':
-                            # Résolution sécurisée du chemin absolu
-                            file_path = block['file_path']
-                            if not Path(file_path).is_absolute() and ctrl.files.working_dir:
-                                abs_path = (Path(ctrl.files.working_dir) / file_path).resolve()
+                            choix = input(f"Créer ce fichier dans le répertoire ? (o/n) : ").strip().lower()
+                            if choix == 'o':
+                                success, msg = ctrl.editor.create_file(block['file_path'], block['content'], working_dir=ctrl.files.working_dir)
+                                print(f"\n[SYSTÈME] {msg}")
+                                if success:
+                                    # Recharger le fichier pour qu'il soit dans le contexte IA
+                                    ctrl.files.load_file(block['file_path'])
                             else:
-                                abs_path = Path(file_path).resolve()
+                                print("\n[SYSTÈME] Création annulée.")
                                 
-                            success, msg = ctrl.editor.apply_edit(abs_path, block['search_content'], block['replace_content'])
-                            print(f"\n[SYSTÈME] {msg}")
-                            if success:
-                                # Recharger le fichier mis à jour pour le contexte
-                                ctrl.files.load_file(block['file_path'])
-                        else:
-                            print("\n[SYSTÈME] Modification annulée.")
+                        # Traitement des modifications
+                        for block in edit_blocks:
+                            print(f"\n📂 PROPOSITION DE MODIFICATION DE : {block['file_path']}")
+                            if block.get('invalid'):
+                                print(f"\n[REJETÉ] {block.get('error_message')}")
+                                print("-" * 40)
+                                continue
+                                
+                            print("-" * 40)
+                            print("<<<<<<< SEARCH")
+                            print(block['search_content'])
+                            print("=======")
+                            print(block['replace_content'])
+                            print(">>>>>>> REPLACE")
+                            print("-" * 40)
+                            
+                            choix = input(f"Appliquer cette modification ? (o/n) : ").strip().lower()
+                            if choix == 'o':
+                                # Résolution sécurisée du chemin absolu
+                                file_path = block['file_path']
+                                if not Path(file_path).is_absolute() and ctrl.files.working_dir:
+                                    abs_path = (Path(ctrl.files.working_dir) / file_path).resolve()
+                                else:
+                                    abs_path = Path(file_path).resolve()
+                                    
+                                success, msg = ctrl.editor.apply_edit(abs_path, block['search_content'], block['replace_content'])
+                                print(f"\n[SYSTÈME] {msg}")
+                                if success:
+                                    # Recharger le fichier mis à jour pour le contexte
+                                    ctrl.files.load_file(block['file_path'])
+                            else:
+                                print("\n[SYSTÈME] Modification annulée.")
+                                
+                    # Traitement des propositions de commandes
+                    if command_blocks:
+                        print("\n" + "="*50)
+                        print("   PROPOSITIONS D'EXÉCUTION DE COMMANDES")
+                        print("="*50)
+                        for block in command_blocks:
+                            cmd = block['command']
+                            print(f"\n🖥️ COMMANDE PROPOSÉE : {cmd}")
+                            if block.get('invalid'):
+                                print(f"\n[BLOQUÉE (SÉCURITÉ)] {block.get('error_message')}")
+                                print("-" * 40)
+                                continue
+                                
+                            choix = input(f"Exécuter cette commande dans le répertoire ? (o/n) : ").strip().lower()
+                            if choix == 'o':
+                                print(f"\n[SYSTÈME] Début de l'exécution de la commande : {cmd}")
+                                import subprocess
+                                import threading
+                                import os
+                                
+                                creationflags = 0
+                                if os.name == 'nt':
+                                    creationflags = subprocess.CREATE_NO_WINDOW
+                                    
+                                stdout_list = []
+                                stderr_list = []
+                                
+                                try:
+                                    proc = subprocess.Popen(
+                                        cmd,
+                                        shell=True,
+                                        cwd=ctrl.files.working_dir,
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE,
+                                        text=True,
+                                        bufsize=1,
+                                        creationflags=creationflags
+                                    )
+                                    
+                                    # Lecture en temps réel
+                                    def read_stdout():
+                                        for line in iter(proc.stdout.readline, ''):
+                                            print(line, end='')
+                                            stdout_list.append(line)
+                                    def read_stderr():
+                                        for line in iter(proc.stderr.readline, ''):
+                                            print(line, end='', file=sys.stderr)
+                                            stderr_list.append(line)
+                                            
+                                    t_out = threading.Thread(target=read_stdout, daemon=True)
+                                    t_err = threading.Thread(target=read_stderr, daemon=True)
+                                    t_out.start()
+                                    t_err.start()
+                                    
+                                    proc.wait()
+                                    t_out.join()
+                                    t_err.join()
+                                    
+                                    return_code = proc.returncode
+                                    print(f"\n[SYSTÈME] Commande terminée avec le code de retour : {return_code}")
+                                except Exception as e:
+                                    return_code = -1
+                                    error_msg = f"Erreur d'exécution : {e}"
+                                    print(f"\n[SYSTÈME] {error_msg}")
+                                    stderr_list.append(error_msg)
+                                    
+                                # Construction des extraits de sortie
+                                stdout_excerpt = "".join(stdout_list)
+                                stderr_excerpt = "".join(stderr_list)
+                                if len(stdout_excerpt) > 1000:
+                                    stdout_excerpt = stdout_excerpt[:1000] + "\n... [Sortie stdout tronquée]"
+                                if len(stderr_excerpt) > 1000:
+                                    stderr_excerpt = stderr_excerpt[:1000] + "\n... [Sortie stderr tronquée]"
+                                    
+                                ctrl.inject_execution_result_to_history(cmd, return_code, stdout_excerpt, stderr_excerpt, False)
+                            else:
+                                print("\n[SYSTÈME] Commande annulée.")
                     print("\n" + "="*50)
     except (EOFError, KeyboardInterrupt):
         print("\n\nAu revoir !")
