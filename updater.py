@@ -95,6 +95,8 @@ def check_path_excluded(rel_path):
 def run_git_update(root_dir):
     """Exécute la mise à jour par Git pull."""
     log_msg("Lancement de la mise à jour Git (git pull)...")
+    if not shutil.which("git"):
+        return False, "La commande 'git' est introuvable sur le système. Veuillez installer Git ou l'ajouter à la variable d'environnement PATH pour permettre la mise à jour automatique via Git. Après installation de Git, redémarrez Anna pour que le PATH soit pris en compte."
     try:
         res = subprocess.run(["git", "pull", "origin", "main"], cwd=root_dir, capture_output=True, text=True, timeout=30)
         log_msg("Sortie Git : " + res.stdout.strip())

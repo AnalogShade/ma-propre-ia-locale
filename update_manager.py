@@ -207,9 +207,10 @@ def start_updater(mode):
         launcher = f'"{sys.executable}" "{os.path.join(root_dir, "main.py")}"'
 
     # Correction pour exécuter python.exe (avec console) au lieu de pythonw.exe
+    from pathlib import Path
     python_exe = sys.executable
-    if python_exe.lower().endswith("pythonw.exe"):
-        python_exe = python_exe[:-9] + "python.exe"
+    if Path(python_exe).name.lower() == "pythonw.exe":
+        python_exe = str(Path(python_exe).with_name("python.exe"))
 
     updater_script = os.path.join(root_dir, "updater.py")
 
@@ -221,11 +222,8 @@ def start_updater(mode):
         "--launcher", launcher
     ]
 
-    # Construction de la commande cmd pour démarrer la console séparée en mode debug (/k)
-    cmd = [
-        "cmd.exe", "/c", "start", "cmd", "/k",
-        python_exe, updater_script
-    ] + args
-
-    # Démarrage du processus externe sans bloquer
-    subprocess.Popen(cmd, shell=True)
+    # Lancement direct de l'updater dans une nouvelle console Windows
+    cmd = [python_exe, updater_script] + args
+    creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+    print(f"[Updater] Python utilisé : {python_exe}")
+    subprocess.Popen(cmd, creationflags=creationflags)
