@@ -288,6 +288,32 @@ Règles strictes :
                 "message": intent_result.get("message"),
                 "system_context": intent_result.get("system_context")
             }
+
+        # Couche de sécurité additive (fallback) pour la résolution de fichiers implicites
+        if intent_result.get("action") == "none" and self.files.working_dir:
+            available_files = self.files.get_available_files()
+            if available_files:
+                if status_callback:
+                    status_callback("Analyse de sécurité du contexte...")
+                resolution = self.router.resolve_context_required(user_input, available_files)
+                if resolution.get("action") == "load_context":
+                    confidence = resolution.get("confidence", 0.0)
+                    targets = resolution.get("targets", [])
+                    reason = resolution.get("reason", "")
+                    if confidence >= 0.70 and targets:
+                        print(f"  [SAFETY PIPELINE] Résolution de contexte réussie (confiance: {confidence}, raison: {reason}). Chargement automatique de : {targets}")
+                        loaded_list = []
+                        for target in targets:
+                            success, msg = self.files.load_file(target, user_input=user_input)
+                            if success:
+                                loaded_list.append(target)
+                        
+                        if loaded_list:
+                            loaded_msg = f"Contexte de sécurité chargé automatiquement : {', '.join(loaded_list)}"
+                            intent_result["action"] = "load_context"
+                            intent_result["message"] = loaded_msg
+                            intent_result["system_context"] = f"[SUCCÈS] {loaded_msg}"
+                            print(f"  [SAFETY PIPELINE] {loaded_msg}")
             
         # 3. Vérification garde-fou : besoin d'un répertoire de travail actif ou d'un fichier pour certaines requêtes sémantiques détectées
         file_actions_requiring_workspace = ["load_context", "close_file", "reload_file", "open_file"]

@@ -91,6 +91,90 @@ JSON :"""
             print(f"  [DEBUG ROUTER] Erreur inattendue : {e}")
             return {"action": "none", "path_raw": None, "targets": []}
 
+    def resolve_context_required(self, user_input, available_files):
+        """
+        Analyse s'il y a un besoin implicite de charger un ou plusieurs fichiers disponibles
+        pour répondre à la demande de l'utilisateur. Fusionne la détection de lien projet 
+        et la résolution de cibles en un seul appel LLM structuré pour limiter le temps de réponse.
+        """
+        if not available_files:
+            return {"action": "none", "targets": [], "confidence": 0.0, "reason": "Aucun fichier disponible"}
+
+        from pathlib import Path
+        files_str = json.dumps(available_files, ensure_ascii=False)
+        prompt = f"""Tu es en mode STRICT de RÉSOLUTION DE CONTEXTE DE SÉCURITÉ.
+L'utilisateur a envoyé un message. Tu dois analyser si ce message demande ou nécessite d'analyser, modifier, vérifier, créer ou lire du code ou des fichiers dans le projet.
+
+Fichiers disponibles dans le projet : {files_str}
+
+Consignes :
+1. Si le message concerne le projet (code, styles, HTML, design, scripts, etc.), identifie de manière sémantique les fichiers correspondants dans la liste des fichiers disponibles.
+   Retourne l'action "load_context" avec ces fichiers dans la liste "targets".
+2. Si le message est une salutation, une question générale, ou s'il ne concerne aucun fichier du projet, retourne l'action "none" et une liste "targets" vide.
+3. Reste factuel : n'invente pas de fichiers qui n'ont aucun rapport logique avec la demande.
+
+Format attendu (JSON uniquement, ne renvoie rien d'autre) :
+{{
+  "action": "load_context" | "none",
+  "targets": ["nom_du_fichier"],
+  "confidence": 0.0 à 1.0,
+  "reason": "explication concise de ton choix"
+}}
+
+Message utilisateur : "{user_input}"
+JSON :"""
+
+        raw_content = ""
+        try:
+            response = ollama.chat(model=self.model, messages=[{'role': 'user', 'content': prompt}])
+            raw_content = response['message']['content'].strip()
+            
+            # Extraction du bloc JSON si le modèle bavarde
+            start = raw_content.find("{")
+            end = raw_content.rfind("}") + 1
+            if start == -1 or end == 0:
+                raise ValueError("Aucun JSON trouvé")
+                
+            json_str = raw_content[start:end]
+            data = json.loads(json_str)
+            
+            # Normalisation et validation
+            action = data.get("action", "none")
+            targets = data.get("targets", [])
+            confidence = data.get("confidence", 0.0)
+            reason = data.get("reason", "")
+            
+            if isinstance(targets, str):
+                targets = [targets]
+            elif not isinstance(targets, list):
+                targets = []
+                
+            # Nettoyer les cibles et ne retenir que celles qui sont dans available_files (sécurité supplémentaire)
+            cleaned_targets = []
+            for t in targets:
+                t_clean = str(t).strip().replace('\\', '/')
+                # Permettre le match exact ou match sur le nom du fichier
+                matched = False
+                for av_f in available_files:
+                    if av_f == t_clean or Path(av_f).name == t_clean:
+                        cleaned_targets.append(av_f)
+                        matched = True
+                        break
+                # Si le fichier n'existe pas mais est suggéré pour création
+                if not matched and action == "load_context" and t_clean:
+                    cleaned_targets.append(t_clean)
+            
+            return {
+                "action": action,
+                "targets": cleaned_targets,
+                "confidence": float(confidence) if isinstance(confidence, (int, float)) else 0.0,
+                "reason": str(reason)
+            }
+            
+        except Exception as e:
+            print(f"  [DEBUG ROUTER] Échec résolution contexte de sécurité : {e}. Réponse brute : {raw_content}")
+            return {"action": "none", "targets": [], "confidence": 0.0, "reason": str(e)}
+
     def process_intent(self, user_input, file_manager):
         """
         Analyse l'intention via LLM et exécute l'action appropriée via le file_manager.
