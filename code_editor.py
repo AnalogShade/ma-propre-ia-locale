@@ -68,6 +68,31 @@ class CodeEditor:
                 
         return blocks
 
+    def has_placeholders(self, text):
+        """
+        Détecte la présence d'ellipses, résumés ou commentaires indiquant des omissions
+        (ex: ..., [inchangé], [autres sections]) dans un bloc de texte.
+        """
+        import re
+        
+        # Motifs de placeholders ou d'omissions
+        patterns = [
+            r"\.\.\.",  # ...
+            r"\[[^\]]*(?:inchang|autres\s+sections|placeholder|code\s+existant|suite)[^\]]*\]", # [inchangé], [autres sections], [placeholder], [code existant], etc.
+            r"/\*\s*\.\.\.\s*\*/", # /* ... */
+            r"//\s*\.\.\.",        # // ...
+            r"<!--\s*\.\.\.\s*-->", # <!-- ... -->
+            r"/\*\s*(?:inchang|autres\s+sections|placeholder)[^*]*\*/", # /* autres sections */
+            r"//\s*(?:inchang|autres\s+sections|placeholder)", # // autres sections
+            r"<!--\s*(?:inchang|autres\s+sections|placeholder).*?-->" # <!-- autres sections -->
+        ]
+        
+        text_lower = text.lower()
+        for pattern in patterns:
+            if re.search(pattern, text_lower) or re.search(pattern, text):
+                return True
+        return False
+
     def parse_search_replace_blocks(self, text):
         """
         Analyse le texte pour extraire les blocs de modification de fichiers.
@@ -84,7 +109,9 @@ class CodeEditor:
             {
                 "file_path": "nom_du_fichier.ext",
                 "search_content": "code existant...",
-                "replace_content": "nouveau code..."
+                "replace_content": "nouveau code...",
+                "invalid": bool,
+                "error_message": str
             },
             ...
         ]
@@ -93,6 +120,7 @@ class CodeEditor:
         if not text:
             return blocks
             
+        import json
         lines = text.splitlines()
         current_file = None
         state = "seeking"  # "seeking", "search", "replace"
@@ -123,10 +151,25 @@ class CodeEditor:
             # Détection de la fin du bloc REPLACE
             if state == "replace" and stripped.startswith(">>>>>>> REPLACE"):
                 if current_file:
+                    search_str = "\n".join(search_lines)
+                    replace_str = "\n".join(replace_lines)
+                    
+                    invalid = False
+                    error_msg = ""
+                    if self.has_placeholders(search_str):
+                        invalid = True
+                        error_msg = (
+                            "Rejeté : Le bloc SEARCH contient des ellipses, résumés ou placeholders "
+                            "(comme '...', 'inchangé', 'autres sections'). Le bloc SEARCH doit être "
+                            "une copie exacte, complète et continue du code à remplacer."
+                        )
+                        
                     blocks.append({
                         "file_path": current_file,
-                        "search_content": "\n".join(search_lines),
-                        "replace_content": "\n".join(replace_lines)
+                        "search_content": search_str,
+                        "replace_content": replace_str,
+                        "invalid": invalid,
+                        "error_message": error_msg
                     })
                 state = "seeking"
                 current_file = None
@@ -203,6 +246,14 @@ class CodeEditor:
             path = Path(file_path).resolve()
             if not path.exists():
                 return False, f"Le fichier '{file_path}' n'existe pas."
+                
+            # Sécurité stricte anti-placeholders dans SEARCH
+            if self.has_placeholders(search_text):
+                return False, (
+                    "La modification est refusée car le bloc SEARCH contient des ellipses, "
+                    "des résumés ou des commentaires d'omission (comme '...', 'inchangé', 'autres sections'). "
+                    "Le bloc SEARCH doit correspondre exactement et en continu au code réel à remplacer."
+                )
                 
             # Lire le contenu actuel
             with open(path, 'r', encoding='utf-8') as f:

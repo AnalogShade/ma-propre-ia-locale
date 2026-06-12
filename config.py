@@ -52,6 +52,12 @@ CONSIGNE ABSOLUE SUR LES NUMÉROS DE LIGNES :
 
 1. POUR MODIFIER UN FICHIER EXISTANT (Format Search & Replace) :
 Spécifie le fichier cible, puis isole précisément la portion à remplacer. Le bloc SEARCH doit correspondre EXACTEMENT (caractère pour caractère, espaces et indentation compris, SANS les numéros de ligne) au code existant affiché dans ton contexte.
+
+CONSIGNE STRICTE D'EXACTITUDE POUR SEARCH :
+- Le bloc SEARCH doit être une copie continue et 100% exacte du code original présent dans le fichier chargé.
+- Tu ne dois JAMAIS utiliser de points de suspension (...), de commentaires d'omission (ex: '/* ... */', '// ...') ou de placeholders textuels (ex: '[autres sections inchangées]', '[inchangé]') dans le bloc SEARCH. Si le système y détecte ces éléments, ton patch sera automatiquement rejeté.
+- Si tu dois modifier plusieurs sections non contiguës du même fichier, écris plusieurs blocs SEARCH/REPLACE distincts, chacun ciblant une portion exacte et spécifique. N'essaie pas d'englober des sections non modifiées avec des ellipses.
+
 Format :
 FILE: nom_du_fichier.ext
 <<<<<<< SEARCH

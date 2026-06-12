@@ -100,13 +100,18 @@ def run_console(ctrl, checker_results=None):
                             
                     # Traitement des modifications
                     for block in edit_blocks:
-                        print(f"\n[MODIFICATION] Fichier ciblé : {block['file_path']}")
+                        print(f"\n📂 PROPOSITION DE MODIFICATION DE : {block['file_path']}")
+                        if block.get('invalid'):
+                            print(f"\n[REJETÉ] {block.get('error_message')}")
+                            print("-" * 40)
+                            continue
+                            
                         print("-" * 40)
-                        print("<<< ANCIEN CODE (SEARCH)")
+                        print("<<<<<<< SEARCH")
                         print(block['search_content'])
-                        print("===")
-                        print(">>> NOUVEAU CODE (REPLACE)")
+                        print("=======")
                         print(block['replace_content'])
+                        print(">>>>>>> REPLACE")
                         print("-" * 40)
                         
                         choix = input(f"Appliquer cette modification ? (o/n) : ").strip().lower()

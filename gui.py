@@ -1234,7 +1234,13 @@ Note : Shift + Entrée pour un saut de ligne."""
                     for block in create_blocks:
                         self.show_diff_block(block['file_path'], "create", create_content=block['content'])
                     for block in edit_blocks:
-                        self.show_diff_block(block['file_path'], "edit", search_content=block['search_content'], replace_content=block['replace_content'])
+                        self.show_diff_block(
+                            block['file_path'], "edit", 
+                            search_content=block['search_content'], 
+                            replace_content=block['replace_content'],
+                            invalid=block.get('invalid', False),
+                            error_message=block.get('error_message', "")
+                        )
                         
             self.root.after(0, display_response_and_diffs)
         except Exception as e:
@@ -1327,7 +1333,7 @@ Note : Shift + Entrée pour un saut de ligne."""
         self.settings.set_setting("selected_model", model_name)
         print(f"[SETTINGS] Modèle configuré à chaud : {model_name}")
 
-    def show_diff_block(self, file_path, block_type, search_content="", replace_content="", create_content=""):
+    def show_diff_block(self, file_path, block_type, search_content="", replace_content="", create_content="", invalid=False, error_message=""):
         """
         Crée un cadre Tkinter contenant le diff visuel et les boutons interactifs,
         et l'insère directement dans la zone de chat.
@@ -1367,7 +1373,8 @@ Note : Shift + Entrée pour un saut de ligne."""
         
         # État et actions des boutons
         def on_apply():
-            btn_apply.config(state="disabled")
+            if 'btn_apply' in locals() and btn_apply.winfo_exists():
+                btn_apply.config(state="disabled")
             btn_cancel.config(state="disabled")
             
             if block_type == "create":
@@ -1388,17 +1395,29 @@ Note : Shift + Entrée pour un saut de ligne."""
                     self.files.load_file(file_path)
                     
         def on_cancel():
-            btn_apply.config(state="disabled")
+            if 'btn_apply' in locals() and btn_apply.winfo_exists():
+                btn_apply.config(state="disabled")
             btn_cancel.config(state="disabled")
-            self.append_chat("Système", f"Modification de '{file_path}' annulée.")
+            if invalid:
+                self.append_chat("Système", f"Signalement de '{file_path}' ignoré.")
+            else:
+                self.append_chat("Système", f"Modification de '{file_path}' annulée.")
             
         action_title = "Créer le fichier" if block_type == "create" else "Appliquer"
-        btn_apply = tk.Button(btn_frame, text=f"✓ {action_title}", command=on_apply, bg="#03dac6", fg="black", activebackground="#018786", relief="flat", font=("Arial", 9, "bold"), padx=15, pady=5)
-        btn_apply.pack(side="left", padx=(0, 10))
         
-        btn_cancel = tk.Button(btn_frame, text="✗ Annuler", command=on_cancel, bg="#444444", fg="white", activebackground="#666666", relief="flat", font=("Arial", 9), padx=15, pady=5)
-        btn_cancel.pack(side="left")
-        
+        if invalid:
+            error_label = tk.Label(btn_frame, text=f"⚠ {error_message}", bg="#1e1e1e", fg="#ff5555", font=("Arial", 9, "bold"), wraplength=500, justify="left", anchor="w")
+            error_label.pack(fill="x", pady=5)
+            
+            btn_cancel = tk.Button(btn_frame, text="✗ Ignorer", command=on_cancel, bg="#444444", fg="white", activebackground="#666666", relief="flat", font=("Arial", 9), padx=15, pady=5)
+            btn_cancel.pack(side="left")
+        else:
+            btn_apply = tk.Button(btn_frame, text=f"✓ {action_title}", command=on_apply, bg="#03dac6", fg="black", activebackground="#018786", relief="flat", font=("Arial", 9, "bold"), padx=15, pady=5)
+            btn_apply.pack(side="left", padx=(0, 10))
+            
+            btn_cancel = tk.Button(btn_frame, text="✗ Annuler", command=on_cancel, bg="#444444", fg="white", activebackground="#666666", relief="flat", font=("Arial", 9), padx=15, pady=5)
+            btn_cancel.pack(side="left")
+            
         # Insertion en tant que fenêtre en ligne dans la chat_area
         self.chat_area.insert(tk.END, "\n")
         self.chat_area.window_create(tk.END, window=diff_frame)

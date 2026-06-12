@@ -445,7 +445,66 @@ Règles strictes :
         if not clean_response.strip():
             clean_response = "[La réponse a été interrompue durant la réflexion]"
 
-        # Enregistrement de la réponse propre dans l'historique
+        # Première analyse des propositions de modifications de fichiers
+        create_blocks = self.editor.parse_create_blocks(clean_response)
+        edit_blocks = self.editor.parse_search_replace_blocks(clean_response)
+
+        # Boucle de correction automatique (max 1 tentative)
+        has_invalid = any(block.get("invalid") for block in edit_blocks)
+        if has_invalid:
+            print("  [SAFETY PATCH] Détection de blocs de modification invalides (omissions/placeholders). Lancement de la boucle de correction automatique (max 1 tentative)...")
+            
+            correction_user_msg = (
+                "Attention, une ou plusieurs des modifications proposées ont été rejetées car un bloc SEARCH contient des ellipses, "
+                "des résumés ou des commentaires d'omission (comme '...', 'inchangé', 'autres sections').\n"
+                "Le bloc SEARCH doit correspondre EXACTEMENT et en continu (caractère pour caractère) au code présent dans le fichier chargé.\n"
+                "Règle de correction :\n"
+                "1. Ne mets jamais d'ellipses ou de placeholders dans SEARCH.\n"
+                "2. Si tu dois faire plusieurs changements séparés, écris plusieurs petits blocs SEARCH/REPLACE ciblés au lieu d'un seul bloc approximatif.\n"
+                "3. Régénère uniquement le(s) patch(s) de modification corrigé(s) au format FILE/SEARCH/REPLACE exact."
+            )
+            
+            # Construire un contexte temporaire
+            temp_context = list(context)
+            temp_context.append({"role": "assistant", "content": clean_response})
+            temp_context.append({"role": "user", "content": correction_user_msg})
+            
+            if status_callback:
+                status_callback("Correction automatique du patch...")
+                
+            retry_response = self.engine.get_response(
+                temp_context,
+                images=images,
+                user_summary=user_summary,
+                assistant_summary=assistant_summary,
+                assistant_name=assistant_name,
+                files_context=files_context,
+                compressed_context=compressed_context,
+                chunk_callback=chunk_callback,
+                status_callback=status_callback,
+                on_start_callback=on_start_callback
+            )
+            
+            if retry_response:
+                clean_retry = retry_response
+                if "<think>" in retry_response:
+                    parts = retry_response.split("<think>", 1)
+                    before_think = parts[0]
+                    rest = parts[1]
+                    if "</think>" in rest:
+                        clean_retry = before_think + rest.split("</think>", 1)[1]
+                    else:
+                        clean_retry = before_think
+                
+                if not clean_retry.strip():
+                    clean_retry = "[La réponse a été interrompue durant la réflexion]"
+                
+                clean_response = clean_retry
+                # Ré-analyser les blocs à partir de la réponse corrigée
+                create_blocks = self.editor.parse_create_blocks(clean_response)
+                edit_blocks = self.editor.parse_search_replace_blocks(clean_response)
+
+        # Enregistrement de la réponse propre (et corrigée le cas échéant) dans l'historique
         self.memory.add_message("assistant", clean_response)
         
         # Détection d'émotion associée sur la réponse propre
@@ -456,10 +515,6 @@ Règles strictes :
         except Exception as e:
             print(f"[CONTROLLER WARNING] Échec de la détection d'émotion : {e}")
             
-        # Analyse des propositions de modifications de fichiers (diffs) sur la réponse propre
-        create_blocks = self.editor.parse_create_blocks(clean_response)
-        edit_blocks = self.editor.parse_search_replace_blocks(clean_response)
-        
         return {
             "type": "ai_response",
             "content": clean_response,
