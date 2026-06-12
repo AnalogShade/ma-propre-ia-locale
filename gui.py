@@ -1231,16 +1231,120 @@ Note : Shift + Entrée pour un saut de ligne."""
                     create_blocks = result.get("create_blocks", [])
                     edit_blocks = result.get("edit_blocks", [])
                     
+                    all_blocks = []
                     for block in create_blocks:
-                        self.show_diff_block(block['file_path'], "create", create_content=block['content'])
+                        all_blocks.append(("create", block))
                     for block in edit_blocks:
-                        self.show_diff_block(
-                            block['file_path'], "edit", 
-                            search_content=block['search_content'], 
-                            replace_content=block['replace_content'],
-                            invalid=block.get('invalid', False),
-                            error_message=block.get('error_message', "")
-                        )
+                        all_blocks.append(("edit", block))
+                        
+                    if len(all_blocks) == 1:
+                        # Conserver le comportement d'origine pour un seul bloc
+                        b_type, block = all_blocks[0]
+                        if b_type == "create":
+                            self.show_diff_block(block['file_path'], "create", create_content=block['content'])
+                        else:
+                            self.show_diff_block(
+                                block['file_path'], "edit", 
+                                search_content=block['search_content'], 
+                                replace_content=block['replace_content'],
+                                invalid=block.get('invalid', False),
+                                error_message=block.get('error_message', "")
+                            )
+                    elif len(all_blocks) >= 2:
+                        # Cadre conteneur pour regrouper tous les changements
+                        container_frame = tk.Frame(self.chat_area, bg="#1e1e1e", highlightbackground="#333333", highlightthickness=1, bd=0, padx=10, pady=10)
+                        
+                        pending_list = []
+                        btn_apply_all = None
+                        btn_cancel_all = None
+                        
+                        # Désactiver automatiquement les boutons globaux s'il n'y a plus aucun bloc pending
+                        def update_global_buttons():
+                            has_pending = any(b["state"]["status"] == "pending" for b in pending_list)
+                            if not has_pending:
+                                if btn_apply_all and btn_apply_all.winfo_exists():
+                                    btn_apply_all.config(state="disabled")
+                                if btn_cancel_all and btn_cancel_all.winfo_exists():
+                                    btn_cancel_all.config(state="disabled")
+                                    
+                        for idx, (b_type, block) in enumerate(all_blocks):
+                            # Séparateur entre les blocs
+                            if idx > 0:
+                                separator = tk.Frame(container_frame, height=1, bg="#333333", bd=0)
+                                separator.pack(fill="x", pady=10)
+                                
+                            if b_type == "create":
+                                self.show_diff_block(
+                                    block['file_path'], "create", 
+                                    create_content=block['content'],
+                                    parent_frame=container_frame,
+                                    pending_list=pending_list,
+                                    on_state_change=update_global_buttons
+                                )
+                            else:
+                                self.show_diff_block(
+                                    block['file_path'], "edit", 
+                                    search_content=block['search_content'], 
+                                    replace_content=block['replace_content'],
+                                    invalid=block.get('invalid', False),
+                                    error_message=block.get('error_message', ""),
+                                    parent_frame=container_frame,
+                                    pending_list=pending_list,
+                                    on_state_change=update_global_buttons
+                                )
+                                
+                        # Séparateur avant les boutons globaux
+                        separator = tk.Frame(container_frame, height=1, bg="#333333", bd=0)
+                        separator.pack(fill="x", pady=10)
+                        
+                        global_btn_frame = tk.Frame(container_frame, bg="#1e1e1e")
+                        global_btn_frame.pack(fill="x", pady=(5, 0))
+                        
+                        def apply_all():
+                            if btn_apply_all and btn_apply_all.winfo_exists():
+                                btn_apply_all.config(state="disabled")
+                            if btn_cancel_all and btn_cancel_all.winfo_exists():
+                                btn_cancel_all.config(state="disabled")
+                            
+                            for b in pending_list:
+                                if b["state"]["status"] == "pending":
+                                    if not b["invalid"]:
+                                        try:
+                                            b["apply"]()
+                                        except Exception as ex:
+                                            print(f"[GUI ERROR] Échec de l'application globale d'un bloc : {ex}")
+                                    else:
+                                        try:
+                                            b["cancel"]()
+                                        except Exception as ex:
+                                            print(f"[GUI ERROR] Échec de l'invalidation globale d'un bloc : {ex}")
+                                            
+                        def cancel_all():
+                            if btn_apply_all and btn_apply_all.winfo_exists():
+                                btn_apply_all.config(state="disabled")
+                            if btn_cancel_all and btn_cancel_all.winfo_exists():
+                                btn_cancel_all.config(state="disabled")
+                                
+                            for b in pending_list:
+                                if b["state"]["status"] == "pending":
+                                    try:
+                                        b["cancel"]()
+                                    except Exception as ex:
+                                        print(f"[GUI ERROR] Échec du rejet global d'un bloc : {ex}")
+                                        
+                        btn_apply_all = tk.Button(global_btn_frame, text="✓ Tout appliquer", command=apply_all, bg="#03dac6", fg="black", activebackground="#018786", relief="flat", font=("Arial", 9, "bold"), padx=15, pady=5)
+                        btn_apply_all.pack(side="left", padx=(0, 10))
+                        
+                        btn_cancel_all = tk.Button(global_btn_frame, text="✗ Tout rejeter", command=cancel_all, bg="#444444", fg="white", activebackground="#666666", relief="flat", font=("Arial", 9), padx=15, pady=5)
+                        btn_cancel_all.pack(side="left")
+                        
+                        # Insertion du conteneur dans le chat_area
+                        self.chat_area.config(state='normal')
+                        self.chat_area.insert(tk.END, "\n")
+                        self.chat_area.window_create(tk.END, window=container_frame)
+                        self.chat_area.insert(tk.END, "\n")
+                        self.chat_area.config(state='disabled')
+                        self.chat_area.yview(tk.END)
                         
             self.root.after(0, display_response_and_diffs)
         except Exception as e:
@@ -1333,16 +1437,20 @@ Note : Shift + Entrée pour un saut de ligne."""
         self.settings.set_setting("selected_model", model_name)
         print(f"[SETTINGS] Modèle configuré à chaud : {model_name}")
 
-    def show_diff_block(self, file_path, block_type, search_content="", replace_content="", create_content="", invalid=False, error_message=""):
+    def show_diff_block(self, file_path, block_type, search_content="", replace_content="", create_content="", invalid=False, error_message="", parent_frame=None, pending_list=None, on_state_change=None):
         """
         Crée un cadre Tkinter contenant le diff visuel et les boutons interactifs,
-        et l'insère directement dans la zone de chat.
+        et l'insère directement dans la zone de chat ou dans un parent_frame.
         """
         # Activer le chat pour insertion
-        self.chat_area.config(state='normal')
+        if not parent_frame:
+            self.chat_area.config(state='normal')
         
         # Création du cadre principal du Diff
-        diff_frame = tk.Frame(self.chat_area, bg="#1e1e1e", highlightbackground="#333333", highlightthickness=1, bd=0, padx=10, pady=10)
+        if parent_frame:
+            diff_frame = tk.Frame(parent_frame, bg="#1e1e1e", bd=0, padx=5, pady=5)
+        else:
+            diff_frame = tk.Frame(self.chat_area, bg="#1e1e1e", highlightbackground="#333333", highlightthickness=1, bd=0, padx=10, pady=10)
         
         title_text = f"📂 CRÉATION DE FICHIER : {file_path}" if block_type == "create" else f"📂 MODIFICATION DE FICHIER : {file_path}"
         title = tk.Label(diff_frame, text=title_text, bg="#1e1e1e", fg="#bb86fc", font=("Arial", 10, "bold"), anchor="w")
@@ -1371,17 +1479,65 @@ Note : Shift + Entrée pour un saut de ligne."""
         btn_frame = tk.Frame(diff_frame, bg="#1e1e1e")
         btn_frame.pack(fill="x", pady=(5, 0))
         
+        # Variables de boutons explicites
+        btn_apply = None
+        btn_cancel = None
+        block_state = {"status": "invalid" if invalid else "pending"}
+        
+        # Label d'erreur dynamique (affiché initialement si invalide, mis à jour si échec d'application)
+        error_status_label = tk.Label(btn_frame, text=f"⚠ {error_message}" if invalid else "", bg="#1e1e1e", fg="#ff5555", font=("Arial", 9, "bold"), wraplength=500, justify="left", anchor="w")
+        if invalid:
+            error_status_label.pack(fill="x", pady=(0, 5))
+            
+        # Label de statut visuel (ex: Appliqué, Annulé, Échoué)
+        status_label = tk.Label(btn_frame, text="", bg="#1e1e1e", font=("Arial", 9, "bold"))
+        status_label.pack(side="left", padx=10)
+        
+        def update_ui_for_status():
+            status = block_state["status"]
+            if status == "applied":
+                status_label.config(text="✓ Appliqué", fg="#80ff80")
+                if btn_apply and btn_apply.winfo_exists():
+                    btn_apply.config(state="disabled")
+                if btn_cancel and btn_cancel.winfo_exists():
+                    btn_cancel.config(state="disabled")
+            elif status == "cancelled":
+                status_label.config(text="✗ Annulé", fg="#888888")
+                if btn_apply and btn_apply.winfo_exists():
+                    btn_apply.config(state="disabled")
+                if btn_cancel and btn_cancel.winfo_exists():
+                    btn_cancel.config(state="disabled")
+            elif status == "failed":
+                status_label.config(text="⚠ Échoué", fg="#ff5555")
+                if btn_apply and btn_apply.winfo_exists():
+                    btn_apply.config(state="disabled")
+                if btn_cancel and btn_cancel.winfo_exists():
+                    btn_cancel.config(state="disabled")
+            elif status == "invalid":
+                status_label.config(text="⚠ Invalide", fg="#ff5555")
+            else:
+                status_label.config(text="", fg="#e0e0e0")
+        
         # État et actions des boutons
         def on_apply():
-            if 'btn_apply' in locals() and btn_apply.winfo_exists():
+            if block_state["status"] not in ("pending", "failed"):
+                return False
+            
+            if btn_apply and btn_apply.winfo_exists():
                 btn_apply.config(state="disabled")
-            btn_cancel.config(state="disabled")
+            if btn_cancel and btn_cancel.winfo_exists():
+                btn_cancel.config(state="disabled")
             
             if block_type == "create":
                 success, msg = self.editor.create_file(file_path, create_content, working_dir=self.files.working_dir)
                 self.append_chat("Système", msg)
                 if success:
+                    block_state["status"] = "applied"
                     self.files.load_file(file_path)
+                else:
+                    block_state["status"] = "failed"
+                    error_status_label.config(text=f"⚠ {msg}")
+                    error_status_label.pack(fill="x", pady=(0, 5))
             else:
                 from pathlib import Path
                 if not Path(file_path).is_absolute() and self.files.working_dir:
@@ -1392,23 +1548,39 @@ Note : Shift + Entrée pour un saut de ligne."""
                 success, msg = self.editor.apply_edit(abs_path, search_content, replace_content)
                 self.append_chat("Système", msg)
                 if success:
+                    block_state["status"] = "applied"
                     self.files.load_file(file_path)
-                    
+                else:
+                    block_state["status"] = "failed"
+                    error_status_label.config(text=f"⚠ {msg}")
+                    error_status_label.pack(fill="x", pady=(0, 5))
+            
+            update_ui_for_status()
+            if on_state_change:
+                on_state_change()
+            return success
+            
         def on_cancel():
-            if 'btn_apply' in locals() and btn_apply.winfo_exists():
+            if block_state["status"] != "pending":
+                return
+            block_state["status"] = "cancelled"
+            
+            if btn_apply and btn_apply.winfo_exists():
                 btn_apply.config(state="disabled")
-            btn_cancel.config(state="disabled")
+            if btn_cancel and btn_cancel.winfo_exists():
+                btn_cancel.config(state="disabled")
             if invalid:
                 self.append_chat("Système", f"Signalement de '{file_path}' ignoré.")
             else:
                 self.append_chat("Système", f"Modification de '{file_path}' annulée.")
             
+            update_ui_for_status()
+            if on_state_change:
+                on_state_change()
+            
         action_title = "Créer le fichier" if block_type == "create" else "Appliquer"
         
         if invalid:
-            error_label = tk.Label(btn_frame, text=f"⚠ {error_message}", bg="#1e1e1e", fg="#ff5555", font=("Arial", 9, "bold"), wraplength=500, justify="left", anchor="w")
-            error_label.pack(fill="x", pady=5)
-            
             btn_cancel = tk.Button(btn_frame, text="✗ Ignorer", command=on_cancel, bg="#444444", fg="white", activebackground="#666666", relief="flat", font=("Arial", 9), padx=15, pady=5)
             btn_cancel.pack(side="left")
         else:
@@ -1418,13 +1590,28 @@ Note : Shift + Entrée pour un saut de ligne."""
             btn_cancel = tk.Button(btn_frame, text="✗ Annuler", command=on_cancel, bg="#444444", fg="white", activebackground="#666666", relief="flat", font=("Arial", 9), padx=15, pady=5)
             btn_cancel.pack(side="left")
             
-        # Insertion en tant que fenêtre en ligne dans la chat_area
-        self.chat_area.insert(tk.END, "\n")
-        self.chat_area.window_create(tk.END, window=diff_frame)
-        self.chat_area.insert(tk.END, "\n")
+        # Initialiser l'état de l'UI
+        update_ui_for_status()
         
-        self.chat_area.config(state='disabled')
-        self.chat_area.yview(tk.END)
+        # Enregistrer le bloc dans pending_list s'il est fourni (inclut aussi les invalides avec leur statut actuel)
+        if pending_list is not None:
+            pending_list.append({
+                "state": block_state,
+                "apply": on_apply,
+                "cancel": on_cancel,
+                "invalid": invalid
+            })
+            
+        if parent_frame:
+            diff_frame.pack(fill="x", pady=5)
+        else:
+            # Insertion en tant que fenêtre en ligne dans la chat_area
+            self.chat_area.insert(tk.END, "\n")
+            self.chat_area.window_create(tk.END, window=diff_frame)
+            self.chat_area.insert(tk.END, "\n")
+            
+            self.chat_area.config(state='disabled')
+            self.chat_area.yview(tk.END)
 
     def _detect_sd_checkpoints_thread(self):
         """Détecte de manière asynchrone les checkpoints Stable Diffusion (locaux ou en ligne)."""
