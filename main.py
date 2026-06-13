@@ -1,7 +1,21 @@
 import sys
 import os
 
-# 1. Vérification précoce des dépendances
+# 1. Démarrage automatique d'Ollama si configuré
+try:
+    from settings_manager import SettingsManager
+    from config import SETTINGS_FILE
+    settings = SettingsManager(SETTINGS_FILE)
+    enable_auto = settings.get_setting("enable_auto_ollama", True)
+    if enable_auto:
+        import ollama_manager
+        proc = ollama_manager.start_ollama_if_needed()
+        if proc:
+            ollama_manager.register_cleanup(proc)
+except Exception as e:
+    print(f"[ANNA] Avertissement: Impossible d'initialiser le démarrage automatique d'Ollama : {e}")
+
+# 2. Vérification précoce des dépendances
 try:
     import dependency_checker
     is_console = "--console" in sys.argv

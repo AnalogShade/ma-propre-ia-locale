@@ -1960,7 +1960,7 @@ Note : Shift + Entrée pour un saut de ligne."""
         """Affiche une boîte de dialogue pour configurer la mémoire et la taille du contexte."""
         dialog = tk.Toplevel(self.root)
         dialog.title("Réglages du Contexte")
-        dialog.geometry("450x250")
+        dialog.geometry("450x300")
         dialog.configure(bg="#1e1e1e")
         dialog.transient(self.root)
         dialog.grab_set()
@@ -2008,7 +2008,25 @@ Note : Shift + Entrée pour un saut de ligne."""
             relief="flat",
             bd=0
         )
-        chk.pack(anchor="w", padx=20, pady=(0, 15))
+        chk.pack(anchor="w", padx=20, pady=(0, 10))
+
+        # Case à cocher pour le démarrage/arrêt automatique d'Ollama
+        current_auto_ollama = self.ctrl.settings.get_setting("enable_auto_ollama", True)
+        auto_ollama_var = tk.BooleanVar(value=current_auto_ollama)
+        
+        chk_ollama = tk.Checkbutton(
+            dialog,
+            text="Gérer automatiquement le démarrage/arrêt d'Ollama",
+            variable=auto_ollama_var,
+            bg="#1e1e1e",
+            fg="#e0e0e0",
+            selectcolor="#333333",
+            activebackground="#1e1e1e",
+            activeforeground="white",
+            relief="flat",
+            bd=0
+        )
+        chk_ollama.pack(anchor="w", padx=20, pady=(0, 15))
 
         # Boutons Sauvegarder et Fermer
         btn_frame = tk.Frame(dialog, bg="#1e1e1e")
@@ -2017,6 +2035,7 @@ Note : Shift + Entrée pour un saut de ligne."""
         def save():
             self.ctrl.settings.set_setting("history_context_size", int(scale.get()))
             self.ctrl.settings.set_setting("enable_compressed_context", enable_var.get())
+            self.ctrl.settings.set_setting("enable_auto_ollama", auto_ollama_var.get())
             messagebox.showinfo("Succès", "Configuration du contexte sauvegardée avec succès !", parent=dialog)
             dialog.destroy()
 
