@@ -1,5 +1,6 @@
 import threading
 import os
+import time
 import ollama
 from config import (
     SETTINGS_FILE, DEFAULT_MODEL_NAME, 
@@ -172,14 +173,25 @@ Règles strictes :
 
         threading.Thread(target=task, daemon=True).start()
 
-    def _trigger_background_memory_task(self, user_msg):
+    def _trigger_background_memory_task(self, user_msg, sys_trace_callback=None):
         """Lance une tâche asynchrone en tâche de fond pour l'extraction de faits en mémoire."""
         def task():
+            if sys_trace_callback:
+                sys_trace_callback(f"[Appel LLM] Lancement : extraction de faits (Arrière-plan)\n  - Modèle : {self.engine.model}\n  - Rôle : extract_fact")
+            start_time = time.time()
             try:
                 fact = self.engine.extract_fact(user_msg)
+                duration = time.time() - start_time
+                if sys_trace_callback:
+                    fact_str = str(fact)
+                    display_fact = fact_str if len(fact_str) <= 500 else fact_str[:500] + "\n[... TRONQUÉ ...]"
+                    sys_trace_callback(f"[Appel LLM] Terminé : extraction de faits (Durée : {duration:.2f}s)\n  - Fait extrait : {display_fact}")
                 if fact:
                     self.memory.process_extracted_fact(fact)
             except Exception as e:
+                duration = time.time() - start_time
+                if sys_trace_callback:
+                    sys_trace_callback(f"[Appel LLM] Échec : extraction de faits (Durée : {duration:.2f}s) - Erreur : {e}")
                 print(f"[CONTROLLER WARNING] Échec de l'extraction de faits en arrière-plan : {e}")
                 
         threading.Thread(target=task, daemon=True).start()
@@ -264,7 +276,7 @@ Règles strictes :
             
         return {"handled": True, "action": "unknown", "message": f"Commande slash inconnue : {cmd}"}
 
-    def process_user_message_sync(self, user_input, images=None, chunk_callback=None, status_callback=None, on_start_callback=None):
+    def process_user_message_sync(self, user_input, images=None, chunk_callback=None, status_callback=None, on_start_callback=None, sys_trace_callback=None):
         """
         Traite un message utilisateur en langage naturel de manière synchrone.
         Retourne un dictionnaire unifié contenant les résultats IA et système.
@@ -273,18 +285,34 @@ Règles strictes :
         if hasattr(self, 'image_manager') and self.image_manager.is_active():
             return self.image_manager.process_user_message(user_input, self.engine)
 
+        if sys_trace_callback:
+            sys_trace_callback("=== DÉBUT PRÉPARATION DU CONTEXTE ===")
+            sys_trace_callback(f"[Système] Modèle actif : {self.engine.model}")
+        
+        start_context_prep = time.time()
+
         if status_callback:
             status_callback("Préparation du contexte...")
 
         # 1. Lancement de l'extraction de faits en tâche de fond
-        self._trigger_background_memory_task(user_input)
+        if sys_trace_callback:
+            sys_trace_callback("[Mémoire] Lancement de l'extraction de faits en tâche de fond...")
+        self._trigger_background_memory_task(user_input, sys_trace_callback=sys_trace_callback)
         
         # 2. Détection d'intention sémantique via IntentRouter (LLM-First)
-        intent_result = self.router.process_intent(user_input, self.files)
+        if sys_trace_callback:
+            sys_trace_callback("[Routage] Analyse de l'intention sémantique via IntentRouter...")
+        intent_result = self.router.process_intent(user_input, self.files, sys_trace_callback=sys_trace_callback)
+        if sys_trace_callback:
+            sys_trace_callback(f"[Routage] Action d'intention : {intent_result.get('action')}")
+            
         if intent_result.get("handled"):
             # Enregistrement système dans la mémoire pour préserver l'historique court terme
             self.memory.add_message("user", user_input)
             self.memory.add_message("assistant", intent_result.get("system_context"))
+            prep_duration = time.time() - start_context_prep
+            if sys_trace_callback:
+                sys_trace_callback(f"=== FIN PRÉPARATION (Intention traitée - Durée : {prep_duration:.2f}s) ===")
             return {
                 "type": "intent_handled",
                 "action": intent_result.get("action"),
@@ -294,22 +322,35 @@ Règles strictes :
 
         # Couche de sécurité additive (fallback) pour la résolution de fichiers implicites
         if intent_result.get("action") == "none" and self.files.working_dir:
+            if sys_trace_callback:
+                sys_trace_callback("[Sécurité] Scan récursif des fichiers disponibles du projet...")
             available_files = self.files.get_available_files()
+            if sys_trace_callback:
+                sys_trace_callback(f"[Sécurité] {len(available_files)} fichier(s) disponible(s) dans le répertoire")
             if available_files:
                 if status_callback:
                     status_callback("Analyse de sécurité du contexte...")
-                resolution = self.router.resolve_context_required(user_input, available_files)
+                resolution = self.router.resolve_context_required(user_input, available_files, sys_trace_callback=sys_trace_callback)
+                if sys_trace_callback:
+                    sys_trace_callback(f"[Sécurité] Résultat résolution contexte : action={resolution.get('action')} | confiance={resolution.get('confidence'):.2f} | raison='{resolution.get('reason')}'")
                 if resolution.get("action") == "load_context":
                     confidence = resolution.get("confidence", 0.0)
                     targets = resolution.get("targets", [])
                     reason = resolution.get("reason", "")
                     if confidence >= 0.70 and targets:
                         print(f"  [SAFETY PIPELINE] Résolution de contexte réussie (confiance: {confidence}, raison: {reason}). Chargement automatique de : {targets}")
+                        if sys_trace_callback:
+                            sys_trace_callback(f"[Sécurité] Confiance ({confidence:.2f} >= 0.70) validée. Chargement automatique de : {targets}")
                         loaded_list = []
                         for target in targets:
                             success, msg = self.files.load_file(target, user_input=user_input)
                             if success:
                                 loaded_list.append(target)
+                                if sys_trace_callback:
+                                    sys_trace_callback(f"  - [Fichier] '{target}' chargé avec succès")
+                            else:
+                                if sys_trace_callback:
+                                    sys_trace_callback(f"  - [Fichier] Échec chargement '{target}' : {msg}")
                         
                         if loaded_list:
                             loaded_msg = f"Contexte de sécurité chargé automatiquement : {', '.join(loaded_list)}"
@@ -329,12 +370,18 @@ Règles strictes :
         if not self.files.working_dir and not self.files.last_file_load_success:
             if intent_result.get("action") in file_actions_requiring_workspace:
                 msg = "Aucun répertoire de travail ni fichier n'est défini. Spécifie d'abord ton dossier (ex: 'Voici mon dossier C:\\Projet')."
+                prep_duration = time.time() - start_context_prep
+                if sys_trace_callback:
+                    sys_trace_callback(f"[Erreur] Action '{intent_result.get('action')}' impossible sans espace de travail.")
+                    sys_trace_callback(f"=== FIN PRÉPARATION (Abandon - Durée : {prep_duration:.2f}s) ===")
                 return {
                     "type": "error",
                     "message": msg
                 }
             
         # Récupération sélective de la mémoire (mode observation)
+        if sys_trace_callback:
+            sys_trace_callback("[Mémoire] Récupération sélective dans la mémoire à court et long terme...")
         memory_sources = {
             "user_profile": self.memory.user_profile,
             "assistant_profile": self.memory.assistant_profile,
@@ -345,6 +392,7 @@ Règles strictes :
         if SELECTIVE_MEMORY_OBSERVATION:
             from config import CORE_MEMORY_IDS
             dynamic_selected_count = len([f for f in retrieved.injected_facts if f["id"] not in CORE_MEMORY_IDS])
+            core_selected_count = len(retrieved.injected_facts) - dynamic_selected_count
             print("\n[DEBUG MEMORY RETRIEVER]")
             print(f"- Mots-clés détectés : {', '.join(retrieved.keywords_detected) if retrieved.keywords_detected else 'Aucun'}")
             print(f"- Faits sélectionnés : {dynamic_selected_count}")
@@ -356,6 +404,14 @@ Règles strictes :
             else:
                 print("  - Aucun")
             print()
+            
+            if sys_trace_callback:
+                sys_trace_callback(f"[Mémoire] Résultats MemoryRetriever :\n  - Mots-clés détectés : {', '.join(retrieved.keywords_detected) if retrieved.keywords_detected else 'aucun'}\n  - Faits permanents injectés : {core_selected_count}\n  - Faits dynamiques sélectionnés : {dynamic_selected_count}\n  - Faits ignorés : {retrieved.ignored_count}")
+                if retrieved.debug_details:
+                    details_list = []
+                    for item in retrieved.debug_details:
+                        details_list.append(f"    • {item['id']} | score {item['score']} | raisons : {', '.join(item['reasons'])}")
+                    sys_trace_callback("[Mémoire] Détails des faits dynamiques sélectionnés :\n" + "\n".join(details_list))
 
         # 4. Appel de l'IA principal
         if ENABLE_SELECTIVE_MEMORY:
@@ -406,6 +462,34 @@ Règles strictes :
         self.memory.add_message("user", user_input)
         context = self.memory.get_context(context_size)
         
+        # Dimensionnement et diagnostic du prompt final
+        sys_prompt_base = self.engine.system_prompt.strip().format(name=assistant_name)
+        sys_chars = len(sys_prompt_base)
+        user_summary_chars = len(user_summary)
+        assistant_summary_chars = len(assistant_summary)
+        files_chars = len(files_context)
+        compressed_chars = len(compressed_context)
+        history_chars = sum(len(m.get("content", "")) for m in context)
+        history_msg_count = len(context)
+        open_files_count = len(self.files.loaded_files)
+        
+        total_chars = sys_chars + user_summary_chars + assistant_summary_chars + files_chars + compressed_chars + history_chars
+        approx_tokens = int(total_chars / 4)
+        
+        if sys_trace_callback:
+            sys_trace_callback("[Prompt] Composition et dimensionnement du prompt final :")
+            sys_trace_callback(f"  - Instructions système de base : {sys_chars} caractères")
+            sys_trace_callback(f"  - Profil utilisateur (Louis)  : {user_summary_chars} caractères")
+            sys_trace_callback(f"  - Profil assistant (Anna)      : {assistant_summary_chars} caractères")
+            sys_trace_callback(f"  - Fichiers projet chargés      : {files_chars} caractères ({open_files_count} fichier(s) ouvert(s))")
+            sys_trace_callback(f"  - Historique de discussion     : {history_chars} caractères ({history_msg_count} messages)")
+            sys_trace_callback(f"  - Tampon de contexte compressé : {compressed_chars} caractères")
+            sys_trace_callback(f"  => Taille estimée globale : {total_chars} caractères (~{approx_tokens} tokens)")
+            
+            prep_duration = time.time() - start_context_prep
+            sys_trace_callback(f"=== FIN PRÉPARATION DU CONTEXTE (Durée totale : {prep_duration:.2f}s) ===")
+            sys_trace_callback(f"[Appel LLM] Lancement : génération de la réponse (Modèle : {self.engine.model})...")
+
         response = self.engine.get_response(
             context,
             images=images,

@@ -1,4 +1,5 @@
 import json
+import time
 import ollama
 from config import DEFAULT_MODEL_NAME
 
@@ -6,7 +7,7 @@ class IntentRouter:
     def __init__(self):
         self.model = DEFAULT_MODEL_NAME
 
-    def get_file_intent(self, user_input):
+    def get_file_intent(self, user_input, sys_trace_callback=None):
         prompt = f"""Analyse le message de l'utilisateur pour détecter s'il demande une opération sur un répertoire ou fait référence à un ou plusieurs fichiers (pour les lire, les analyser, les ouvrir ou les modifier).
 Réponds UNIQUEMENT avec un objet JSON valide.
 
@@ -34,9 +35,18 @@ Message : "{user_input}"
 JSON :"""
 
         raw_content = ""
+        if sys_trace_callback:
+            sys_trace_callback(f"[Appel LLM] Lancement : routage d'intention\n  - Modèle : {self.model}\n  - Rôle : get_file_intent")
+        start_time = time.time()
         try:
             response = ollama.chat(model=self.model, messages=[{'role': 'user', 'content': prompt}])
+            duration = time.time() - start_time
             raw_content = response['message']['content'].strip()
+            
+            # Troncature du contenu brut
+            display_content = raw_content if len(raw_content) <= 800 else raw_content[:800] + "\n[... TRONQUÉ ...]"
+            if sys_trace_callback:
+                sys_trace_callback(f"[Appel LLM] Terminé : routage d'intention\n  - Durée : {duration:.2f}s\n  - Réponse brute :\n{display_content}")
             
             # Extraction basique du bloc JSON si le modèle bavarde
             start = raw_content.find("{")
@@ -85,13 +95,19 @@ JSON :"""
             return data
             
         except json.JSONDecodeError as e:
+            duration = time.time() - start_time
+            if sys_trace_callback:
+                sys_trace_callback(f"[Appel LLM] Échec parsing JSON : routage d'intention (Durée : {duration:.2f}s) - Erreur : {e}")
             print(f"  [DEBUG ROUTER] Erreur de parsing JSON stricte. Réponse brute : {raw_content}")
             return {"action": "none", "path_raw": None, "targets": []}
         except Exception as e:
+            duration = time.time() - start_time
+            if sys_trace_callback:
+                sys_trace_callback(f"[Appel LLM] Échec critique : routage d'intention (Durée : {duration:.2f}s) - Erreur : {e}")
             print(f"  [DEBUG ROUTER] Erreur inattendue : {e}")
             return {"action": "none", "path_raw": None, "targets": []}
 
-    def resolve_context_required(self, user_input, available_files):
+    def resolve_context_required(self, user_input, available_files, sys_trace_callback=None):
         """
         Analyse s'il y a un besoin implicite de charger un ou plusieurs fichiers disponibles
         pour répondre à la demande de l'utilisateur. Fusionne la détection de lien projet 
@@ -125,9 +141,18 @@ Message utilisateur : "{user_input}"
 JSON :"""
 
         raw_content = ""
+        if sys_trace_callback:
+            sys_trace_callback(f"[Appel LLM] Lancement : résolution contexte\n  - Modèle : {self.model}\n  - Rôle : resolve_context_required\n  - Scan projet : {len(available_files)} fichiers référencés dans le prompt")
+        start_time = time.time()
         try:
             response = ollama.chat(model=self.model, messages=[{'role': 'user', 'content': prompt}])
+            duration = time.time() - start_time
             raw_content = response['message']['content'].strip()
+            
+            # Troncature du contenu brut
+            display_content = raw_content if len(raw_content) <= 800 else raw_content[:800] + "\n[... TRONQUÉ ...]"
+            if sys_trace_callback:
+                sys_trace_callback(f"[Appel LLM] Terminé : résolution contexte\n  - Durée : {duration:.2f}s\n  - Réponse brute :\n{display_content}")
             
             # Extraction du bloc JSON si le modèle bavarde
             start = raw_content.find("{")
@@ -172,10 +197,13 @@ JSON :"""
             }
             
         except Exception as e:
+            duration = time.time() - start_time
+            if sys_trace_callback:
+                sys_trace_callback(f"[Appel LLM] Échec : résolution contexte (Durée : {duration:.2f}s) - Erreur : {e}")
             print(f"  [DEBUG ROUTER] Échec résolution contexte de sécurité : {e}. Réponse brute : {raw_content}")
             return {"action": "none", "targets": [], "confidence": 0.0, "reason": str(e)}
 
-    def process_intent(self, user_input, file_manager):
+    def process_intent(self, user_input, file_manager, sys_trace_callback=None):
         """
         Analyse l'intention via LLM et exécute l'action appropriée via le file_manager.
         Retourne un dictionnaire structuré et standardisé pour l'interface appelante.
@@ -186,7 +214,7 @@ JSON :"""
         if clean_input in blacklist:
             return {"handled": False, "action": "none", "message": "", "system_context": ""}
 
-        intent = self.get_file_intent(user_input)
+        intent = self.get_file_intent(user_input, sys_trace_callback=sys_trace_callback)
         action = intent.get("action", "none")
         path_raw = intent.get("path_raw")
         targets = intent.get("targets", [])

@@ -347,13 +347,30 @@ class AnnaGUI:
         self.trace_panel = tk.Frame(self.chat_and_trace_container, bg="#1e1e1e", width=280, highlightbackground="#333333", highlightthickness=1)
         self.trace_panel.pack_propagate(False)
         
-        self.trace_title_label = tk.Label(self.trace_panel, text="🔍 Trace du modèle", bg="#1e1e1e", fg="#bb86fc", font=("Arial", 10, "bold"), pady=8)
+        # 1. Section trace système (haut, prend 45% de la hauteur disponible)
+        self.sys_trace_frame = tk.Frame(self.trace_panel, bg="#1e1e1e")
+        self.sys_trace_frame.pack(side="top", expand=True, fill="both", pady=(0, 2))
+        
+        self.sys_trace_title_label = tk.Label(self.sys_trace_frame, text="⚙️ Diagnostic & Contexte", bg="#1e1e1e", fg="#03dac6", font=("Arial", 9, "bold"), pady=4)
+        self.sys_trace_title_label.pack(fill="x")
+        
+        self.sys_trace_text_area = scrolledtext.ScrolledText(self.sys_trace_frame, wrap=tk.WORD, state='disabled', font=("Consolas", 9), bg="#121212", fg="#03dac6", insertbackground="white", bd=0)
+        self.sys_trace_text_area.pack(expand=True, fill="both", padx=5, pady=2)
+        
+        self.sys_trace_text_area.config(state='normal')
+        self.sys_trace_text_area.insert(tk.END, "Aucun diagnostic disponible.")
+        self.sys_trace_text_area.config(state='disabled')
+        
+        # 2. Section réflexion modèle (bas, prend 55% de la hauteur disponible)
+        self.model_trace_frame = tk.Frame(self.trace_panel, bg="#1e1e1e")
+        self.model_trace_frame.pack(side="bottom", expand=True, fill="both", pady=(2, 0))
+        
+        self.trace_title_label = tk.Label(self.model_trace_frame, text="🧠 Réflexion du modèle", bg="#1e1e1e", fg="#bb86fc", font=("Arial", 9, "bold"), pady=4)
         self.trace_title_label.pack(fill="x")
         
-        self.trace_text_area = scrolledtext.ScrolledText(self.trace_panel, wrap=tk.WORD, state='disabled', font=("Consolas", 9), bg="#121212", fg="#88ff88", insertbackground="white", bd=0)
-        self.trace_text_area.pack(expand=True, fill="both", padx=5, pady=5)
+        self.trace_text_area = scrolledtext.ScrolledText(self.model_trace_frame, wrap=tk.WORD, state='disabled', font=("Consolas", 9), bg="#121212", fg="#88ff88", insertbackground="white", bd=0)
+        self.trace_text_area.pack(expand=True, fill="both", padx=5, pady=2)
         
-        # Texte de trace par défaut
         self.trace_text_area.config(state='normal')
         self.trace_text_area.insert(tk.END, "Aucun contenu de trace disponible.")
         self.trace_text_area.config(state='disabled')
@@ -668,6 +685,32 @@ class AnnaGUI:
                 self.trace_text_area.insert(tk.END, text)
             self.trace_text_area.config(state='disabled')
             self.trace_text_area.yview(tk.END)
+        except Exception:
+            pass
+
+    def append_sys_trace(self, text):
+        try:
+            self.sys_trace_text_area.config(state='normal')
+            content = self.sys_trace_text_area.get("1.0", tk.END).strip()
+            if content == "Aucun diagnostic disponible.":
+                self.sys_trace_text_area.delete("1.0", tk.END)
+            self.sys_trace_text_area.insert(tk.END, text + "\n")
+            self.sys_trace_text_area.config(state='disabled')
+            self.sys_trace_text_area.yview(tk.END)
+        except Exception:
+            pass
+
+    def clear_traces(self):
+        try:
+            self.trace_text_area.config(state='normal')
+            self.trace_text_area.delete("1.0", tk.END)
+            self.trace_text_area.insert(tk.END, "Aucun contenu de trace disponible.")
+            self.trace_text_area.config(state='disabled')
+            
+            self.sys_trace_text_area.config(state='normal')
+            self.sys_trace_text_area.delete("1.0", tk.END)
+            self.sys_trace_text_area.insert(tk.END, "Aucun diagnostic disponible.")
+            self.sys_trace_text_area.config(state='disabled')
         except Exception:
             pass
 
@@ -1107,7 +1150,7 @@ Note : Shift + Entrée pour un saut de ligne."""
         self.printed_final_text_len = 0
         
         # Effacer l'ancien texte de trace et afficher un message d'attente
-        self.root.after(0, lambda: self.update_trace_content("Aucun contenu de trace disponible."))
+        self.root.after(0, lambda: self.clear_traces())
         self.root.after(0, lambda: self.update_status("Préparation du contexte...", active=True))
         
         assistant_name = self.memory.assistant_profile.get("nom", "Anna")
@@ -1120,7 +1163,7 @@ Note : Shift + Entrée pour un saut de ligne."""
             has_started_ui[0] = True
             
             def do_start():
-                # Affichage dans le chat
+                # Display in chat
                 if original_msg:
                     self.append_chat("Vous", original_msg)
                 else:
@@ -1131,7 +1174,7 @@ Note : Shift + Entrée pour un saut de ligne."""
                         if att.get_type() == "image":
                             self.append_chat_image(att.image)
 
-                # Vider la zone de saisie et miniatures (bascule temporaire à 'normal' requise si désactivé)
+                # Clear input area and thumbnails (temporary switch to 'normal' required if disabled)
                 self.user_input.config(state="normal")
                 self.user_input.delete("1.0", tk.END)
                 if self.generating:
@@ -1152,13 +1195,17 @@ Note : Shift + Entrée pour un saut de ligne."""
         def status_callback(status_text):
             self.root.after(0, lambda: self.update_status(status_text, active=True))
 
+        def sys_trace_callback(trace_text):
+            self.root.after(0, lambda: self.append_sys_trace(trace_text))
+
         try:
             result = self.ctrl.process_user_message_sync(
                 user_input, 
                 images=images,
                 chunk_callback=chunk_callback,
                 status_callback=status_callback,
-                on_start_callback=on_start_callback
+                on_start_callback=on_start_callback,
+                sys_trace_callback=sys_trace_callback
             )
             
             def display_response_and_diffs():
@@ -2337,7 +2384,11 @@ Note : Shift + Entrée pour un saut de ligne."""
         try:
             # 1. Récupération des contenus textuels
             chat_text = self.chat_area.get("1.0", tk.END)
-            trace_text = self.trace_text_area.get("1.0", tk.END)
+            sys_trace_text = self.sys_trace_text_area.get("1.0", tk.END)
+            model_trace_text = self.trace_text_area.get("1.0", tk.END)
+            
+            # Combinaison des deux traces
+            combined_trace = f"=== TRACE SYSTEME & CONTEXTE ===\n{sys_trace_text}\n=== TRACE REFLEXION MODELE ===\n{model_trace_text}"
             
             # 2. Récupération des informations de diagnostic
             active_model = getattr(self.engine, "model", None)
@@ -2347,7 +2398,7 @@ Note : Shift + Entrée pour un saut de ligne."""
             # 3. Formatage de l'export via le service
             export_content = debug_export_service.generate_export_content(
                 chat_text=chat_text,
-                trace_text=trace_text,
+                trace_text=combined_trace,
                 active_model=active_model,
                 working_dir=working_dir,
                 current_file=current_file
