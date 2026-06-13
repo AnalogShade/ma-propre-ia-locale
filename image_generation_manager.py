@@ -143,7 +143,7 @@ class ImageGenerationManager:
         Déclenche la génération réelle via le StableDiffusionService.
         """
         try:
-            result = self.service.generate_image(params)
+            result = self.service.generate_image(params, output_dir=self.settings.output_dir)
             if result.get("status") == "success":
                 return {
                     "type": "image_generation_result",

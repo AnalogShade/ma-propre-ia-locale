@@ -101,7 +101,7 @@ class StableDiffusionService:
         except Exception:
             return {"progress": 0.0, "eta": 0.0}
 
-    def generate_image(self, params):
+    def generate_image(self, params, output_dir=None):
         """
         Génère une image réelle via l'API de Stable Diffusion (txt2img) de façon sécurisée.
         """
@@ -169,14 +169,36 @@ class StableDiffusionService:
                 # Nom de fichier unique basé sur le timestamp et la seed
                 timestamp = int(time.time())
                 filename = f"image_{timestamp}_{final_seed}.png"
-                output_dir = os.path.join("data", "output_images")
                 
-                # Sécurité de création du répertoire de sortie
-                os.makedirs(output_dir, exist_ok=True)
+                # Validation et détermination du dossier de sortie absolu
+                default_dir = os.path.abspath(os.path.join("data", "output_images"))
+                target_dir = os.path.abspath(output_dir) if (output_dir and output_dir.strip()) else default_dir
                 
-                image_path = os.path.abspath(os.path.join(output_dir, filename))
-                with open(image_path, "wb") as f:
-                    f.write(image_bytes)
+                # Tente de créer et d'écrire dans target_dir. Si échec, repli vers default_dir.
+                success = False
+                error_msg = ""
+                try:
+                    os.makedirs(target_dir, exist_ok=True)
+                    image_path = os.path.join(target_dir, filename)
+                    with open(image_path, "wb") as f:
+                        f.write(image_bytes)
+                    success = True
+                except Exception as ex:
+                    error_msg = str(ex)
+                    print(f"[SD SERVICE WARNING] Échec de l'écriture dans le dossier cible {target_dir} ({ex}). Repli sur le dossier par défaut.")
+                
+                if not success:
+                    # Repli sur le dossier par défaut
+                    try:
+                        os.makedirs(default_dir, exist_ok=True)
+                        image_path = os.path.join(default_dir, filename)
+                        with open(image_path, "wb") as f:
+                            f.write(image_bytes)
+                    except Exception as e_default:
+                        # Si même le repli échoue, on lève une exception pour informer l'utilisateur de l'échec
+                        raise IOError(f"Impossible d'enregistrer l'image dans le répertoire cible ni dans le répertoire par défaut. Erreurs : {error_msg} / {str(e_default)}")
+                
+                image_path = os.path.abspath(image_path)
             
             return {
                 "status": "success",

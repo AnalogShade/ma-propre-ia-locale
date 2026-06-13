@@ -27,6 +27,9 @@ class ImageSettingsManager:
             
         if self.settings_manager.get_setting("sd_selected_checkpoint") is None:
             self.settings_manager.set_setting("sd_selected_checkpoint", "")
+        
+        if self.settings_manager.get_setting("sd_output_dir") is None:
+            self.settings_manager.set_setting("sd_output_dir", "")
 
     # Getters
     @property
@@ -45,9 +48,16 @@ class ImageSettingsManager:
     def selected_checkpoint(self):
         return self.settings_manager.get_setting("sd_selected_checkpoint", "")
 
+    @property
+    def output_dir(self):
+        return self.settings_manager.get_setting("sd_output_dir", "")
+
     # Setters
     def set_api_url(self, url):
         self.settings_manager.set_setting("sd_api_url", url.strip())
+
+    def set_output_dir(self, path):
+        self.settings_manager.set_setting("sd_output_dir", path.strip())
 
     def set_install_dir(self, path):
         self.settings_manager.set_setting("sd_install_dir", path.strip())

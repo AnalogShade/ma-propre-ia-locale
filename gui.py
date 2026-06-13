@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import scrolledtext, messagebox
+from tkinter import scrolledtext, messagebox, filedialog
 import threading
 import os
 from PIL import Image, ImageTk
@@ -1872,13 +1872,20 @@ Note : Shift + Entrée pour un saut de ligne."""
         """Affiche une boîte de dialogue Tkinter (Toplevel) pour configurer les dossiers Stable Diffusion."""
         dialog = tk.Toplevel(self.root)
         dialog.title("Configuration Stable Diffusion")
-        dialog.geometry("450x320")
+        dialog.geometry("480x450")
         dialog.configure(bg="#1e1e1e")
         dialog.transient(self.root)
         dialog.grab_set()
 
         # Rendre le dialogue centré par rapport à la fenêtre parente
         dialog.geometry(f"+{self.root.winfo_x() + 50}+{self.root.winfo_y() + 50}")
+
+        # Fonction locale de navigation de dossier
+        def browse_directory(entry_widget, title):
+            directory = filedialog.askdirectory(parent=dialog, title=title)
+            if directory:
+                entry_widget.delete(0, tk.END)
+                entry_widget.insert(0, os.path.normpath(directory))
 
         # Labels et Entrées
         tk.Label(dialog, text="⚙️ CONFIGURATION STABLE DIFFUSION", bg="#1e1e1e", fg="#bb86fc", font=("Arial", 11, "bold")).pack(pady=(15, 15))
@@ -1891,15 +1898,33 @@ Note : Shift + Entrée pour un saut de ligne."""
 
         # Dossier Installation
         tk.Label(dialog, text="Dossier d'installation Stable Diffusion (optionnel) :", bg="#1e1e1e", fg="#e0e0e0", anchor="w").pack(fill="x", padx=20)
-        install_entry = tk.Entry(dialog, bg="#333333", fg="white", insertbackground="white", relief="flat", bd=5)
-        install_entry.pack(fill="x", padx=20, pady=(5, 10))
+        install_frame = tk.Frame(dialog, bg="#1e1e1e")
+        install_frame.pack(fill="x", padx=20, pady=(5, 10))
+        install_entry = tk.Entry(install_frame, bg="#333333", fg="white", insertbackground="white", relief="flat", bd=5)
+        install_entry.pack(side="left", fill="x", expand=True)
+        install_btn = tk.Button(install_frame, text="📁", command=lambda: browse_directory(install_entry, "Sélectionner le dossier d'installation"), bg="#3c3c3c", fg="white", activebackground="#555555", relief="flat", padx=8)
+        install_btn.pack(side="right", padx=(5, 0))
         install_entry.insert(0, self.ctrl.image_manager.settings.install_dir)
 
         # Dossier Checkpoints
         tk.Label(dialog, text="Dossier des checkpoints Stable Diffusion (optionnel) :", bg="#1e1e1e", fg="#e0e0e0", anchor="w").pack(fill="x", padx=20)
-        checkpoints_entry = tk.Entry(dialog, bg="#333333", fg="white", insertbackground="white", relief="flat", bd=5)
-        checkpoints_entry.pack(fill="x", padx=20, pady=(5, 10))
+        checkpoints_frame = tk.Frame(dialog, bg="#1e1e1e")
+        checkpoints_frame.pack(fill="x", padx=20, pady=(5, 10))
+        checkpoints_entry = tk.Entry(checkpoints_frame, bg="#333333", fg="white", insertbackground="white", relief="flat", bd=5)
+        checkpoints_entry.pack(side="left", fill="x", expand=True)
+        checkpoints_btn = tk.Button(checkpoints_frame, text="📁", command=lambda: browse_directory(checkpoints_entry, "Sélectionner le dossier des checkpoints"), bg="#3c3c3c", fg="white", activebackground="#555555", relief="flat", padx=8)
+        checkpoints_btn.pack(side="right", padx=(5, 0))
         checkpoints_entry.insert(0, self.ctrl.image_manager.settings.checkpoints_dir)
+
+        # Dossier d'enregistrement des images générées
+        tk.Label(dialog, text="Dossier d'enregistrement des images générées (optionnel) :", bg="#1e1e1e", fg="#e0e0e0", anchor="w").pack(fill="x", padx=20)
+        output_frame = tk.Frame(dialog, bg="#1e1e1e")
+        output_frame.pack(fill="x", padx=20, pady=(5, 10))
+        output_entry = tk.Entry(output_frame, bg="#333333", fg="white", insertbackground="white", relief="flat", bd=5)
+        output_entry.pack(side="left", fill="x", expand=True)
+        output_btn = tk.Button(output_frame, text="📁", command=lambda: browse_directory(output_entry, "Sélectionner le dossier d'enregistrement des images"), bg="#3c3c3c", fg="white", activebackground="#555555", relief="flat", padx=8)
+        output_btn.pack(side="right", padx=(5, 0))
+        output_entry.insert(0, self.ctrl.image_manager.settings.output_dir)
 
         # Boutons Sauvegarder et Fermer
         btn_frame = tk.Frame(dialog, bg="#1e1e1e")
@@ -1909,12 +1934,15 @@ Note : Shift + Entrée pour un saut de ligne."""
             self.ctrl.image_manager.settings.set_api_url(api_entry.get())
             self.ctrl.image_manager.settings.set_install_dir(install_entry.get())
             self.ctrl.image_manager.settings.set_checkpoints_dir(checkpoints_entry.get())
+            self.ctrl.image_manager.settings.set_output_dir(output_entry.get())
             
             # Recalculer l'affichage dans le formulaire
             install_entry.delete(0, tk.END)
             install_entry.insert(0, self.ctrl.image_manager.settings.install_dir)
             checkpoints_entry.delete(0, tk.END)
             checkpoints_entry.insert(0, self.ctrl.image_manager.settings.checkpoints_dir)
+            output_entry.delete(0, tk.END)
+            output_entry.insert(0, self.ctrl.image_manager.settings.output_dir)
             
             # Relancer le scan des checkpoints dans un thread
             threading.Thread(target=self._detect_sd_checkpoints_thread, daemon=True).start()
@@ -2084,8 +2112,9 @@ Note : Shift + Entrée pour un saut de ligne."""
         
         # 3. Widget d'affichage de l'image (avec sauvegarde de la référence Tkinter)
         if photo:
-            img_label = tk.Label(card_frame, image=photo, bg="#1e1e1e")
+            img_label = tk.Label(card_frame, image=photo, bg="#1e1e1e", cursor="hand2")
             img_label.pack(pady=10)
+            img_label.bind("<Button-1>", lambda event, path=image_path: self.open_image_directory(path))
             card_frame.photo = photo  # Prévention stricte du garbage collection
         else:
             err_label = tk.Label(card_frame, text="⚠️ Impossible d'afficher l'image physique.", bg="#1e1e1e", fg="#cf6679", font=("Arial", 10, "italic"))
@@ -2119,6 +2148,27 @@ Note : Shift + Entrée pour un saut de ligne."""
         
         self.chat_area.config(state='disabled')
         self.chat_area.yview(tk.END)
+
+    def open_image_directory(self, image_path):
+        """Ouvre l'explorateur de fichiers sur le dossier contenant l'image et la sélectionne."""
+        import os
+        import subprocess
+        if not image_path or not os.path.exists(image_path):
+            return
+        try:
+            if os.name == 'nt':
+                # Recommandation utilisateur : utilisation de Popen avec liste d'arguments
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(image_path)])
+            else:
+                # Fallback multi-plateforme
+                parent_dir = os.path.dirname(image_path)
+                import sys
+                if sys.platform == 'darwin':
+                    subprocess.Popen(['open', parent_dir])
+                else:
+                    subprocess.Popen(['xdg-open', parent_dir])
+        except Exception as e:
+            print(f"[GUI ERROR] Impossible d'ouvrir le dossier de l'image : {e}")
 
     def show_progress_block(self):
         """Crée et insère un bloc de progression temporaire et stylisé dans le fil de discussion."""
