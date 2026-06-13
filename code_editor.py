@@ -68,12 +68,15 @@ class CodeEditor:
                 
         return blocks
 
-    def has_placeholders(self, text):
+    def has_placeholders(self, text, file_path=None):
         """
         Détecte la présence d'ellipses, résumés ou commentaires indiquant des omissions
         (ex: ..., [inchangé], [autres sections]) dans un bloc de texte.
+        Si file_path est fourni et existe, on vérifie si ces éléments sont réellement
+        présents littéralement dans le fichier d'origine.
         """
         import re
+        from pathlib import Path
         
         # Motifs de placeholders ou d'omissions
         patterns = [
@@ -88,12 +91,63 @@ class CodeEditor:
         ]
         
         text_lower = text.lower()
+        has_pattern = False
+        matching_patterns = []
         for pattern in patterns:
             if re.search(pattern, text_lower) or re.search(pattern, text):
+                has_pattern = True
+                matching_patterns.append(pattern)
+                
+        if not has_pattern:
+            return False
+            
+        # Si aucun fichier n'est fourni, on considère par défaut que c'est un placeholder
+        if not file_path:
+            return True
+            
+        try:
+            path = Path(file_path)
+            if not path.exists():
                 return True
-        return False
+                
+            with open(path, 'r', encoding='utf-8') as f:
+                file_content = f.read()
+                
+            # Premier test simple : si le bloc entier est présent littéralement dans le fichier,
+            # ce n'est pas une omission, c'est du code existant légitime.
+            text_normalized = text.replace("\r\n", "\n")
+            file_normalized = file_content.replace("\r\n", "\n")
+            if text_normalized in file_normalized:
+                return False
+                
+            # Deuxième test : si le bloc entier n'est pas présent littéralement, on vérifie
+            # si CHAQUE ligne suspecte du bloc SEARCH existe littéralement dans le fichier.
+            lines = text.splitlines()
+            for line in lines:
+                line_lower = line.lower()
+                is_suspect = False
+                for pattern in matching_patterns:
+                    if re.search(pattern, line_lower) or re.search(pattern, line):
+                        is_suspect = True
+                        break
+                
+                if is_suspect:
+                    stripped_line = line.strip()
+                    file_lines = [fl.strip() for fl in file_content.splitlines()]
+                    if stripped_line not in file_lines:
+                        # La ligne suspecte n'est pas dans le fichier d'origine, c'est un placeholder
+                        return True
+                        
+            # Si toutes les lignes suspectes ont été trouvées, ce sont des éléments légitimes du fichier
+            return False
+            
+        except Exception as e:
+            # En cas d'erreur de lecture, par sécurité, on considère qu'il y a placeholder
+            print(f"  [DEBUG EDITOR] Erreur lors de la validation du placeholder : {e}")
+            return True
 
-    def parse_search_replace_blocks(self, text):
+
+    def parse_search_replace_blocks(self, text, working_dir=None):
         """
         Analyse le texte pour extraire les blocs de modification de fichiers.
         Format attendu :
@@ -154,9 +208,21 @@ class CodeEditor:
                     search_str = "\n".join(search_lines)
                     replace_str = "\n".join(replace_lines)
                     
+                    # Résolution du chemin absolu du fichier pour validation contextuelle
+                    abs_path = current_file
+                    if working_dir and current_file:
+                        from pathlib import Path
+                        try:
+                            p = Path(current_file)
+                            if not p.is_absolute():
+                                abs_path = str((Path(working_dir) / p).resolve())
+                        except Exception as path_err:
+                            print(f"  [DEBUG EDITOR] Erreur de résolution de chemin : {path_err}")
+                    
                     invalid = False
                     error_msg = ""
-                    if self.has_placeholders(search_str):
+                    if self.has_placeholders(search_str, file_path=abs_path):
+
                         invalid = True
                         error_msg = (
                             "Rejeté : Le bloc SEARCH contient des ellipses, résumés ou placeholders "
@@ -248,7 +314,8 @@ class CodeEditor:
                 return False, f"Le fichier '{file_path}' n'existe pas."
                 
             # Sécurité stricte anti-placeholders dans SEARCH
-            if self.has_placeholders(search_text):
+            if self.has_placeholders(search_text, file_path=path):
+
                 return False, (
                     "La modification est refusée car le bloc SEARCH contient des ellipses, "
                     "des résumés ou des commentaires d'omission (comme '...', 'inchangé', 'autres sections'). "

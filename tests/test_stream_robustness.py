@@ -154,5 +154,77 @@ class TestStreamRobustness(unittest.TestCase):
         self.assertEqual(response, "<think>Thinking process</think>Final response")
         self.assertEqual(received_chunks, ["<think>", "Thinking", " process", "</think>", "Final response"])
 
+    @patch('ollama.Client')
+    @patch('ollama.chat')
+    def test_multiple_and_unclosed_think_tags_cleaning(self, mock_chat, mock_client_class):
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
+        
+        # Test case 1: Multiple closed think tags
+        mock_response = {
+            'message': {
+                'content': '<think>Think 1</think>Content 1<think>Think 2</think>Content 2'
+            }
+        }
+        mock_client.chat.return_value = mock_response
+        mock_chat.return_value = mock_response
+        self.ctrl.memory.clear()
+        
+        result = self.ctrl.process_user_message_sync("hello")
+        self.assertEqual(result.get("content").strip(), "Content 1Content 2")
+        
+        # Test case 2: Unclosed think tag at the end (e.g. cut off)
+        mock_response_unclosed = {
+            'message': {
+                'content': '<think>Think 1</think>Content 1<think>Think 2 unclosed...'
+            }
+        }
+        mock_client.chat.return_value = mock_response_unclosed
+        mock_chat.return_value = mock_response_unclosed
+        
+        result_unclosed = self.ctrl.process_user_message_sync("hello again")
+        self.assertEqual(result_unclosed.get("content").strip(), "Content 1")
+
+    @patch('ollama.Client')
+    def test_silenced_streaming_during_auto_correction(self, mock_client_class):
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
+        
+        def chat_side_effect(*args, **kwargs):
+            if kwargs.get('stream'):
+                return [
+                    {'message': {'content': 'FILE: main.py\n'}},
+                    {'message': {'content': '<<<<<<< SEARCH\nbody {\n    ...\n}\n=======\nbody {\n    color: red;\n}\n>>>>>>> REPLACE'}}
+                ]
+            else:
+                return {
+                    'message': {
+                        'content': 'FILE: main.py\n<<<<<<< SEARCH\nbody {\n    margin: 0;\n}\n=======\nbody {\n    color: red;\n}\n>>>>>>> REPLACE'
+                    }
+                }
+        mock_client.chat.side_effect = chat_side_effect
+        
+        received_chunks = []
+        def chunk_cb(c):
+            received_chunks.append(c)
+            
+        self.ctrl.memory.clear()
+
+        
+        original_get_response = self.ctrl.engine.get_response
+        captured_callbacks = []
+        
+        def mock_get_response(*args, **kwargs):
+            captured_callbacks.append(kwargs.get('chunk_callback'))
+            return original_get_response(*args, **kwargs)
+            
+        with patch.object(self.ctrl.engine, 'get_response', side_effect=mock_get_response):
+            self.ctrl.process_user_message_sync("hello", chunk_callback=chunk_cb)
+            
+        self.assertEqual(captured_callbacks[0], chunk_cb)
+        self.assertIsNone(captured_callbacks[1])
+
 if __name__ == '__main__':
     unittest.main()
+
+

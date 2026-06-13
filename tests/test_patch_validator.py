@@ -93,8 +93,52 @@ body {
         
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+    # 4. Test de validation contextuelle des ellipses
+    print("\n[TEST 4] Validation contextuelle des ellipses (has_placeholders)...")
+    temp_dir = Path(__file__).parent / "temp_contextual_test_project"
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir, ignore_errors=True)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    
+    test_file = temp_dir / "main.py"
+    # Fichier contenant légitimement des points de suspension dans un commentaire
+    file_content = (
+        "# Jeu de Tic Tac Toe\n"
+        "def afficher_plateau(plateau):\n"
+        "    print(\"-\" * 13)\n"
+        "    # ... la logique d'affichage va venir ici\n"
+        "    pass\n"
+    )
+    test_file.write_text(file_content, encoding="utf-8")
+    
+    try:
+        # A. Un bloc SEARCH contenant l'ellipse légitime identique au fichier doit être VALIDÉ
+        search_legitimate = "    print(\"-\" * 13)\n    # ... la logique d'affichage va venir ici\n    pass"
+        is_placeholder = editor.has_placeholders(search_legitimate, file_path=test_file)
+        assert not is_placeholder, "L'ellipse légitime présente dans le fichier aurait dû être acceptée !"
+        print("  [PASS] Ellipse légitime dans le fichier correctement acceptée.")
+        
+        # B. Un bloc SEARCH contenant une ellipse absente du fichier doit être REJETÉ
+        search_placeholder = "def afficher_plateau(plateau):\n    ...\n    pass"
+        is_placeholder = editor.has_placeholders(search_placeholder, file_path=test_file)
+        assert is_placeholder, "L'ellipse inventée (placeholder) aurait dû être rejetée !"
+        print("  [PASS] Ellipse inventée (non présente dans le fichier) correctement rejetée.")
+        
+        # C. Appliquer la modification légitime avec apply_edit
+        success, msg = editor.apply_edit(
+            test_file,
+            search_legitimate,
+            "    print(\"-------------\")"
+        )
+        assert success, f"L'application du patch légitime a échoué : {msg}"
+        print("  [PASS] L'application de la modification légitime avec points de suspension a réussi.")
+        
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
         
     print("\n=== TOUS LES TESTS DE VALIDATION DE PATCH ONT RÉUSSI ! ===")
 
 if __name__ == "__main__":
     test_patch_validator()
+

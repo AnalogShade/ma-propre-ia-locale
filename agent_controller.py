@@ -526,13 +526,10 @@ Règles strictes :
         # Nettoyage des balises de trace <think>...</think> pour l'historique, le TTS et les diffs
         clean_response = response
         if "<think>" in response:
-            parts = response.split("<think>", 1)
-            before_think = parts[0]
-            rest = parts[1]
-            if "</think>" in rest:
-                clean_response = before_think + rest.split("</think>", 1)[1]
-            else:
-                clean_response = before_think
+            import re
+            clean_response = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL)
+            if "<think>" in clean_response:
+                clean_response = clean_response.split("<think>", 1)[0]
                 
         # Protection contre les réponses vides (coupure pendant la réflexion)
         if not clean_response.strip():
@@ -540,7 +537,7 @@ Règles strictes :
 
         # Première analyse des propositions de modifications de fichiers
         create_blocks = self.editor.parse_create_blocks(clean_response)
-        edit_blocks = self.editor.parse_search_replace_blocks(clean_response)
+        edit_blocks = self.editor.parse_search_replace_blocks(clean_response, working_dir=self.files.working_dir)
         print(f"  [PATCH DETECTION] Blocs détectés dans la réponse : {len(create_blocks)} création(s), {len(edit_blocks)} modification(s)")
         for block in edit_blocks:
             status = "INVALID" if block.get("invalid") else "VALID"
@@ -567,7 +564,7 @@ Règles strictes :
             temp_context.append({"role": "user", "content": correction_user_msg})
             
             if status_callback:
-                status_callback("Correction automatique du patch...")
+                status_callback("Correction du patch en cours...")
                 
             retry_response = self.engine.get_response(
                 temp_context,
@@ -577,7 +574,7 @@ Règles strictes :
                 assistant_name=assistant_name,
                 files_context=files_context,
                 compressed_context=compressed_context,
-                chunk_callback=chunk_callback,
+                chunk_callback=None,  # Pas de streaming pour la correction automatique
                 status_callback=status_callback,
                 on_start_callback=on_start_callback
             )
@@ -585,13 +582,10 @@ Règles strictes :
             if retry_response:
                 clean_retry = retry_response
                 if "<think>" in retry_response:
-                    parts = retry_response.split("<think>", 1)
-                    before_think = parts[0]
-                    rest = parts[1]
-                    if "</think>" in rest:
-                        clean_retry = before_think + rest.split("</think>", 1)[1]
-                    else:
-                        clean_retry = before_think
+                    import re
+                    clean_retry = re.sub(r"<think>.*?</think>", "", retry_response, flags=re.DOTALL)
+                    if "<think>" in clean_retry:
+                        clean_retry = clean_retry.split("<think>", 1)[0]
                 
                 if not clean_retry.strip():
                     clean_retry = "[La réponse a été interrompue durant la réflexion]"
@@ -599,7 +593,7 @@ Règles strictes :
                 clean_response = clean_retry
                 # Ré-analyser les blocs à partir de la réponse corrigée
                 create_blocks = self.editor.parse_create_blocks(clean_response)
-                edit_blocks = self.editor.parse_search_replace_blocks(clean_response)
+                edit_blocks = self.editor.parse_search_replace_blocks(clean_response, working_dir=self.files.working_dir)
                 print(f"  [PATCH DETECTION] Blocs après correction automatique : {len(create_blocks)} création(s), {len(edit_blocks)} modification(s)")
                 for block in edit_blocks:
                     status = "INVALID" if block.get("invalid") else "VALID"
