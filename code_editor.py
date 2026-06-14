@@ -444,14 +444,46 @@ class CodeEditor:
                     total_matched_lines = sum(size for _, _, size in matching_blocks)
                     
                     if total_matched_lines == len(norm_search_only):
-                        return False, (
-                            "Le bloc de code à remplacer (SEARCH) semble contenir des omissions ou des lignes sautées.\n"
-                            "Anna a probablement omis des sections de code inchangées pour économiser de la place.\n"
-                            "Par mesure de sécurité pour éviter de corrompre votre fichier, la modification est refusée.\n"
-                            "Conseil : Veuillez demander à Anna de découper ses modifications en blocs SEARCH/REPLACE plus petits et contigus."
-                        )
+                        # On a trouvé toutes les lignes du bloc SEARCH dans le fichier, mais pas de façon contiguë.
+                        # Vérifions si les lignes ignorées/sautées dans le fichier original sont UNIQUEMENT des commentaires ou du vide.
+                        start_orig_idx = matching_blocks[0].b
+                        end_orig_idx = matching_blocks[-2].b + matching_blocks[-2].size - 1
                         
-                    return False, "Le bloc de code à remplacer (SEARCH) n'a pas été trouvé dans le fichier. Modification annulée."
+                        matched_orig_indices = set()
+                        for match in matching_blocks[:-1]:
+                            for offset in range(match.size):
+                                matched_orig_indices.add(match.b + offset)
+                                
+                        skipped_orig_indices = [idx for idx in range(start_orig_idx, end_orig_idx + 1) if idx not in matched_orig_indices]
+                        
+                        def is_comment_or_whitespace(line):
+                            s = line.strip()
+                            if not s:
+                                return True
+                            if s.startswith('#') or s.startswith('//'):
+                                return True
+                            if s.startswith('/*') or s.endswith('*/') or s.startswith('*'):
+                                return True
+                            if s.startswith('<!--') or s.endswith('-->') or s.startswith('<!'):
+                                return True
+                            return False
+                            
+                        skipped_lines = [original_lines[non_empty_orig[idx][0]] for idx in skipped_orig_indices]
+                        if all(is_comment_or_whitespace(line) for line in skipped_lines):
+                            # Toutes les lignes sautées ne sont que des commentaires ou du vide. C'est sûr à appliquer.
+                            first_orig_idx = non_empty_orig[start_orig_idx][0]
+                            last_orig_idx = non_empty_orig[end_orig_idx][0]
+                            new_content_lines = original_lines[:first_orig_idx] + replace_lines + original_lines[last_orig_idx + 1:]
+                            new_content = newline_char.join(new_content_lines)
+                        else:
+                            return False, (
+                                "Le bloc de code à remplacer (SEARCH) semble contenir des omissions ou des lignes sautées.\n"
+                                "Anna a probablement omis des sections de code inchangées pour économiser de la place.\n"
+                                "Par mesure de sécurité pour éviter de corrompre votre fichier, la modification est refusée.\n"
+                                "Conseil : Veuillez demander à Anna de découper ses modifications en blocs SEARCH/REPLACE plus petits et contigus."
+                            )
+                    else:
+                        return False, "Le bloc de code à remplacer (SEARCH) n'a pas été trouvé dans le fichier. Modification annulée."
             
             # Créer la sauvegarde de sécurité
             if not self._create_backup(path):

@@ -222,7 +222,61 @@ def unclosed():
     called_args, called_kwargs = mock_client.chat.call_args
     assert called_kwargs.get("options") == {"num_ctx": 8192}, f"Attendu options avec num_ctx=8192, obtenu {called_kwargs.get('options')}"
     
-    print("  [PASS] Les métadonnées d'Ollama (done, done_reason, prompt_eval, eval_count), num_ctx, num_predict et le contexte natif sont correctement extraites et stockées.")
+    # 7. Test de validation non-contiguë tolérante aux commentaires et lignes vides
+    print("\n[TEST 7] Validation de la tolérance aux commentaires et vides dans la non-contiguïté...")
+    temp_dir = Path(__file__).parent / "temp_comment_tolerant_test_project"
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir, ignore_errors=True)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    
+    test_file = temp_dir / "main.py"
+    file_content = (
+        "def main():\n"
+        "    print('line 1')\n"
+        "    # Un commentaire au milieu qui sera saute\n"
+        "    print('line 2')\n"
+        "    \n"
+        "    print('line 3')\n"
+    )
+    test_file.write_text(file_content, encoding="utf-8")
+    
+    try:
+        # A. Essai d'application d'un patch sans le commentaire ni la ligne vide
+        search_no_comment = "def main():\n    print('line 1')\n    print('line 2')\n    print('line 3')"
+        replace_text = "def main():\n    print('replaced')"
+        
+        success, msg = editor.apply_edit(
+            test_file,
+            search_no_comment,
+            replace_text
+        )
+        assert success, f"Le patch tolérant aux commentaires a échoué : {msg}"
+        
+        content = test_file.read_text(encoding="utf-8")
+        assert "replaced" in content, "Le fichier aurait dû être modifié."
+        assert "line 1" not in content, "Le contenu original doit avoir disparu."
+        print("  [PASS] Patch non-contigu appliqué avec succès en ignorant les commentaires et lignes vides.")
+        
+        # B. Essai d'application d'un patch avec du code réel au milieu (doit échouer)
+        file_content_code = (
+            "def main():\n"
+            "    print('line 1')\n"
+            "    x = 42\n"  # Code réel !
+            "    print('line 2')\n"
+        )
+        test_file.write_text(file_content_code, encoding="utf-8")
+        
+        success, msg = editor.apply_edit(
+            test_file,
+            "def main():\n    print('line 1')\n    print('line 2')",
+            "def main():\n    print('replaced')"
+        )
+        assert not success, "Le patch aurait dû être rejeté car il y a du code réel au milieu !"
+        assert "omissions" in msg or "sautées" in msg, "Le message doit faire référence à des omissions."
+        print("  [PASS] Rejet correct lorsque du code réel est présent dans l'omission.")
+        
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
         
     print("\n=== TOUS LES TESTS DE VALIDATION DE PATCH ONT RÉUSSI ! ===")
 
