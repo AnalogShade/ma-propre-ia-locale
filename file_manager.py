@@ -182,7 +182,7 @@ class FileManager:
         status += "[/ÉTAT SYSTÈME]\n"
         return status
 
-    def get_context_for_ai(self):
+    def get_context_for_ai(self, numbered=True):
         if not self.working_dir and not self.loaded_files:
             return ""
 
@@ -195,20 +195,20 @@ class FileManager:
         
         # Concaténer le contenu de chaque fichier chargé en appliquant les limites de caractères
         for rel_path, file_data in self.loaded_files.items():
-            numbered_content = file_data["numbered"]
+            content_to_use = file_data["numbered"] if numbered else file_data["content"]
             file_header = f"\n--- CONTENU DE {rel_path} ---\n"
             file_footer = "\n"
             
             # Vérifier la limite par fichier
-            if len(numbered_content) > self.max_file_chars:
-                truncated_content = numbered_content[:self.max_file_chars]
+            if len(content_to_use) > self.max_file_chars:
+                truncated_content = content_to_use[:self.max_file_chars]
                 # S'assurer de couper proprement sur un saut de ligne
                 last_newline = truncated_content.rfind("\n")
                 if last_newline != -1:
                     truncated_content = truncated_content[:last_newline]
-                numbered_content = truncated_content + "\n[... TRONQUÉ : Ce fichier dépasse la limite autorisée par fichier ...]"
+                content_to_use = truncated_content + "\n[... TRONQUÉ : Ce fichier dépasse la limite autorisée par fichier ...]"
                 
-            file_entry = file_header + numbered_content + file_footer
+            file_entry = file_header + content_to_use + file_footer
             
             # Vérifier la limite globale
             if len(combined_files_context) + len(file_entry) > self.max_global_chars:

@@ -313,6 +313,8 @@ Règles strictes :
         if hasattr(self, 'image_manager') and self.image_manager.is_active():
             return self.image_manager.process_user_message(user_input, self.engine)
 
+        original_system_prompt = self.engine.system_prompt
+
         if sys_trace_callback:
             sys_trace_callback("=== DÉBUT PRÉPARATION DU CONTEXTE ===")
             sys_trace_callback(f"[Système] Modèle actif : {self.engine.model}")
@@ -508,6 +510,108 @@ Règles strictes :
         if sys_trace_callback:
             sys_trace_callback(mode_diag_report)
 
+        # === ÉTAPE 2 : ÉLAGAGE DU CONTEXTE (PHASE 2) ===
+        pruned_user_facts_count = 0
+        original_history_count = len(context)
+        
+        if active_mode == "CODE":
+            # 1. Chargement du code brut (sans numéros de ligne)
+            files_context = self.files.get_context_for_ai(numbered=False)
+            
+            # 2. Retrait de la personnalité d'Anna
+            assistant_summary = ""
+            
+            # 3. Masquage du contexte compressé conversationnel
+            compressed_context = ""
+            
+            # 4. Filtrage de la mémoire utilisateur / faits du projet
+            if ENABLE_SELECTIVE_MEMORY:
+                technical_keywords = {"projet", "code", "python", "jeu", "tic-tac-toe", "tic tac toe", "main.py", "boucle", "développer"}
+                pruned_user_facts = []
+                for f in retrieved.injected_facts:
+                    if f["category"] in ("user_profile", "long_term_facts"):
+                        text_lower = f["text"].lower()
+                        if any(kw in text_lower for kw in technical_keywords) or any(kw in f["id"].lower() for kw in technical_keywords):
+                            pruned_user_facts.append(f)
+                pruned_user_facts_count = len(pruned_user_facts)
+                if pruned_user_facts:
+                    user_summary = "\n--- CE QUE TU SAIS SUR LE PROJET (Technique) ---\n"
+                    for f in pruned_user_facts:
+                        user_summary += f"- {f['text']}\n"
+                    user_summary += "--- FIN DES CONNAISSANCES ---\n"
+                else:
+                    user_summary = ""
+            else:
+                lines = user_summary.splitlines()
+                technical_keywords = {"projet", "code", "python", "jeu", "tic-tac-toe", "tic tac toe", "main.py", "boucle", "développer"}
+                pruned_lines = []
+                for line in lines:
+                    if any(kw in line.lower() for kw in technical_keywords):
+                        pruned_lines.append(line)
+                pruned_user_facts_count = len(pruned_lines)
+                if pruned_lines:
+                    user_summary = "\n--- CE QUE TU SAIS SUR LE PROJET (Technique) ---\n" + "\n".join(pruned_lines) + "\n--- FIN DES CONNAISSANCES ---\n"
+                else:
+                    user_summary = ""
+            
+            # 5. Élagage et réduction de l'historique de discussion
+            recent_history = self.memory.get_context(5)
+            pruned_history = []
+            technical_keywords_hist = {
+                "code", "python", "classe", "class", "fonction", "def", "import", "bug", "erreur", 
+                "error", "corriger", "corrige", "modifier", "script", "programme", "développer", 
+                "compil", "fichiers", "git", "main.py", "tic-tac-toe", "tic tac toe", "jeu", "boucle"
+            }
+            for idx, msg in enumerate(recent_history):
+                content = msg.get("content", "")
+                if idx == len(recent_history) - 1:
+                    pruned_history.append(msg)
+                    continue
+                if "```" in content:
+                    pruned_history.append(msg)
+                    continue
+                if msg.get("role") == "system" or content.startswith("[SYSTÈME]"):
+                    pruned_history.append(msg)
+                    continue
+                import re
+                words = set(re.sub(r"[^\w\s]", " ", content.lower()).split())
+                if words.intersection(technical_keywords_hist):
+                    pruned_history.append(msg)
+                    continue
+            context = pruned_history
+
+        # Enregistrement et log diagnostique de la réduction (Phase 2)
+        if active_mode == "CODE":
+            pruned_history_count = len(context)
+            pruning_report = (
+                f"\n[DIAGNOSTIC ADAPTATIF - PHASE 2 - RÉDUCTION DU CONTEXTE (Mode CODE)]\n"
+                f"  - Instructions système : Épurées (SYSTEM_PROMPT_CODE utilisé, sans règles d'avatar ni de numéros de ligne).\n"
+                f"  - Personnalité d'Anna (assistant_profile) : RETIRÉE de l'injection sémantique.\n"
+                f"  - Contexte compressé : MASQUÉ.\n"
+                f"  - Fichiers projet chargés : Transmis BRUTS (sans numéros de ligne).\n"
+                f"  - Mémoire (profil utilisateur) : Filtrée ({pruned_user_facts_count} faits techniques conservés).\n"
+                f"  - Historique de discussion : Pruné ({pruned_history_count} conservés sur {original_history_count} messages dans la fenêtre).\n"
+            )
+        else:
+            pruning_report = (
+                f"\n[DIAGNOSTIC ADAPTATIF - PHASE 2 - CONSERVATION DU CONTEXTE (Mode CHAT)]\n"
+                f"  - Instructions système : Complètes (SYSTEM_PROMPT standard avec avatar).\n"
+                f"  - Personnalité d'Anna (assistant_profile) : CONSERVÉE.\n"
+                f"  - Contexte compressé : CONSERVÉ ({len(compressed_context)} caractères).\n"
+                f"  - Fichiers projet chargés : Transmis NUMÉROTÉS.\n"
+                f"  - Mémoire (profil utilisateur) : Complète.\n"
+                f"  - Historique de discussion : Complet ({len(context)} messages).\n"
+            )
+        print(pruning_report)
+        log_diagnostic(pruning_report)
+        if sys_trace_callback:
+            sys_trace_callback(pruning_report)
+
+        # Configurer le prompt système à utiliser temporairement pour le moteur LLM
+        from config import SYSTEM_PROMPT_CODE
+        if active_mode == "CODE":
+            self.engine.system_prompt = SYSTEM_PROMPT_CODE
+
         # Dimensionnement et diagnostic du prompt final
         sys_prompt_base = self.engine.system_prompt.strip().format(name=assistant_name)
         sys_chars = len(sys_prompt_base)
@@ -563,6 +667,7 @@ Règles strictes :
             self._trigger_context_consolidation(older_count)
         
         if not response:
+            self.engine.system_prompt = original_system_prompt
             user_name = self.memory.user_profile.get("prénom", "Louis")
             response = f"Salut {user_name}, je suis là. (Ollama n'a pas renvoyé de texte)"
             return {
@@ -859,6 +964,7 @@ Règles strictes :
         except Exception as e:
             print(f"[CONTROLLER WARNING] Échec de la détection d'émotion : {e}")
             
+        self.engine.system_prompt = original_system_prompt
         return {
             "type": "ai_response",
             "content": clean_response,
