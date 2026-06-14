@@ -137,6 +137,93 @@ body {
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
         
+    # 5. Test de diagnostics d'instrumentation (Phase 1)
+    print("\n[TEST 5] Validation de l'instrumentation diagnostic (Phase 1)...")
+    
+    test_diag_response = """
+FILE: main.py
+<<<<<<< SEARCH
+def hello():
+    pass
+=======
+def hello():
+    print("hi")
+>>>>>>> REPLACE
+
+FILE: other.py
+<<<<<<< SEARCH
+def unclosed():
+    pass
+=======
+def unclosed():
+    print("unclosed block")
+"""
+    
+    diags = {}
+    blocks = editor.parse_search_replace_blocks(test_diag_response, diagnostics=diags)
+    
+    # Vérifier les marqueurs
+    assert diags["raw_markers_file"] == 2, f"Attendu 2 FILE:, obtenu {diags['raw_markers_file']}"
+    assert diags["raw_markers_search"] == 2, f"Attendu 2 SEARCH, obtenu {diags['raw_markers_search']}"
+    assert diags["raw_markers_replace"] == 1, f"Attendu 1 REPLACE, obtenu {diags['raw_markers_replace']}"
+    
+    # Vérifier le bloc incomplet
+    assert len(diags["incomplete_blocks"]) == 1, f"Attendu 1 bloc incomplet, obtenu {len(diags['incomplete_blocks'])}"
+    inc_block = diags["incomplete_blocks"][0]
+    assert inc_block["file_path"] == "other.py", f"Attendu 'other.py', obtenu {inc_block['file_path']}"
+    assert inc_block["state"] == "replace", f"Attendu l'état 'replace', obtenu {inc_block['state']}"
+    assert "unclosed" in inc_block["replace_preview"], f"Attendu 'unclosed' dans l'aperçu, obtenu {inc_block['replace_preview']}"
+    # 6. Test de diagnostics de génération Ollama (Phase 1B)
+    print("\n[TEST 6] Validation de l'instrumentation Ollama (Phase 1B)...")
+    from ai_engine import AIEngine
+    from unittest.mock import MagicMock, patch
+    
+    engine = AIEngine()
+    
+    # Mock show info
+    mock_show_obj = MagicMock()
+    mock_show_obj.modelfile = "PARAMETER num_ctx 4096\nPARAMETER num_predict 2048"
+    mock_show_obj.parameters = "num_ctx 4096\nnum_predict 2048"
+    mock_show_obj.modelinfo = {"gemma.context_length": 8192}
+    
+    mock_show = MagicMock(return_value=mock_show_obj)
+    
+    # Mock client and chat
+    mock_client = MagicMock()
+    mock_chat_response = {
+        "message": {"role": "assistant", "content": "Hello test!"},
+        "done": True,
+        "done_reason": "stop",
+        "prompt_eval_count": 42,
+        "eval_count": 12,
+        "total_duration": 1000000000
+    }
+    mock_client.chat.return_value = mock_chat_response
+    
+    diags_ollama = {}
+    with patch('ollama.show', mock_show), \
+         patch.object(engine, '_get_client', return_value=mock_client):
+         # Appel synchrone (chunk_callback=None)
+         res = engine.get_response(
+             context_messages=[{"role": "user", "content": "Hello"}],
+             ollama_diagnostics=diags_ollama
+         )
+         
+    assert res == "Hello test!", f"Attendu 'Hello test!', obtenu {res}"
+    assert diags_ollama["done"] is True, "Attendu done=True"
+    assert diags_ollama["done_reason"] == "stop", "Attendu done_reason='stop'"
+    assert diags_ollama["prompt_eval_count"] == 42, "Attendu prompt_eval_count=42"
+    assert diags_ollama["eval_count"] == 12, "Attendu eval_count=12"
+    assert diags_ollama["model_ctx"] == 4096, f"Attendu model_ctx=4096, obtenu {diags_ollama['model_ctx']}"
+    assert diags_ollama["model_predict"] == 2048, f"Attendu model_predict=2048, obtenu {diags_ollama['model_predict']}"
+    assert diags_ollama["model_native_ctx"] == 8192, f"Attendu model_native_ctx=8192, obtenu {diags_ollama['model_native_ctx']}"
+    
+    # Vérifier que le paramètre options a bien été transmis avec num_ctx
+    called_args, called_kwargs = mock_client.chat.call_args
+    assert called_kwargs.get("options") == {"num_ctx": 8192}, f"Attendu options avec num_ctx=8192, obtenu {called_kwargs.get('options')}"
+    
+    print("  [PASS] Les métadonnées d'Ollama (done, done_reason, prompt_eval, eval_count), num_ctx, num_predict et le contexte natif sont correctement extraites et stockées.")
+        
     print("\n=== TOUS LES TESTS DE VALIDATION DE PATCH ONT RÉUSSI ! ===")
 
 if __name__ == "__main__":

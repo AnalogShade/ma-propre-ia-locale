@@ -8,7 +8,7 @@ class CodeEditor:
         """
         pass
 
-    def parse_create_blocks(self, text):
+    def parse_create_blocks(self, text, diagnostics=None):
         """
         Analyse le texte pour extraire les blocs de création de fichiers.
         Format attendu :
@@ -29,13 +29,21 @@ class CodeEditor:
         blocks = []
         if not text:
             return blocks
+
+        if isinstance(diagnostics, dict):
+            diagnostics["raw_markers_create"] = diagnostics.get("raw_markers_create", 0) + text.count("<<<<<<< CREATE")
+            diagnostics["raw_markers_create_end"] = diagnostics.get("raw_markers_create_end", 0) + text.count(">>>>>>> CREATE")
+            if "incomplete_blocks" not in diagnostics:
+                diagnostics["incomplete_blocks"] = []
             
         lines = text.splitlines()
         current_file = None
         in_block = False
         block_content = []
         
-        for line in lines:
+        active_block_info = None
+        
+        for line_idx, line in enumerate(lines, 1):
             stripped = line.strip()
             
             # Détection de l'en-tête du fichier
@@ -49,6 +57,12 @@ class CodeEditor:
                 if current_file:
                     in_block = True
                     block_content = []
+                    active_block_info = {
+                        "line_num": line_idx,
+                        "file_path": current_file,
+                        "state": "create",
+                        "preview": ""
+                    }
                 continue
                 
             # Détection de la fin du bloc de création
@@ -60,12 +74,18 @@ class CodeEditor:
                     })
                     in_block = False
                     current_file = None
+                    active_block_info = None
                 continue
                 
             # Accumulation du contenu (on préserve les espaces de début de ligne d'origine)
             if in_block:
                 block_content.append(line)
-                
+                if active_block_info and len(active_block_info["preview"]) < 100:
+                    active_block_info["preview"] += (line + "\n")[:100 - len(active_block_info["preview"])]
+                    
+        if active_block_info and isinstance(diagnostics, dict):
+            diagnostics["incomplete_blocks"].append(active_block_info)
+            
         return blocks
 
     def has_placeholders(self, text, file_path=None):
@@ -146,8 +166,7 @@ class CodeEditor:
             print(f"  [DEBUG EDITOR] Erreur lors de la validation du placeholder : {e}")
             return True
 
-
-    def parse_search_replace_blocks(self, text, working_dir=None):
+    def parse_search_replace_blocks(self, text, working_dir=None, diagnostics=None):
         """
         Analyse le texte pour extraire les blocs de modification de fichiers.
         Format attendu :
@@ -173,6 +192,16 @@ class CodeEditor:
         blocks = []
         if not text:
             return blocks
+
+        if isinstance(diagnostics, dict):
+            diagnostics["raw_markers_file"] = diagnostics.get("raw_markers_file", 0) + text.count("FILE:")
+            diagnostics["raw_markers_search"] = diagnostics.get("raw_markers_search", 0) + text.count("<<<<<<< SEARCH")
+            diagnostics["raw_markers_sep"] = diagnostics.get("raw_markers_sep", 0) + text.count("=======")
+            diagnostics["raw_markers_replace"] = diagnostics.get("raw_markers_replace", 0) + text.count(">>>>>>> REPLACE")
+            if "incomplete_blocks" not in diagnostics:
+                diagnostics["incomplete_blocks"] = []
+            if "rejected_blocks" not in diagnostics:
+                diagnostics["rejected_blocks"] = []
             
         import json
         lines = text.splitlines()
@@ -181,7 +210,9 @@ class CodeEditor:
         search_lines = []
         replace_lines = []
         
-        for line in lines:
+        active_block_info = None
+        
+        for line_idx, line in enumerate(lines, 1):
             stripped = line.strip()
             
             # Détection de l'en-tête du fichier
@@ -195,11 +226,20 @@ class CodeEditor:
                     state = "search"
                     search_lines = []
                     replace_lines = []
+                    active_block_info = {
+                        "line_num": line_idx,
+                        "file_path": current_file,
+                        "state": "search",
+                        "search_preview": "",
+                        "replace_preview": ""
+                    }
                 continue
                 
             # Détection de la séparation =======
             if state == "search" and stripped.startswith("======="):
                 state = "replace"
+                if active_block_info:
+                    active_block_info["state"] = "replace"
                 continue
                 
             # Détection de la fin du bloc REPLACE
@@ -222,13 +262,19 @@ class CodeEditor:
                     invalid = False
                     error_msg = ""
                     if self.has_placeholders(search_str, file_path=abs_path):
-
                         invalid = True
                         error_msg = (
                             "Rejeté : Le bloc SEARCH contient des ellipses, résumés ou placeholders "
                             "(comme '...', 'inchangé', 'autres sections'). Le bloc SEARCH doit être "
                             "une copie exacte, complète et continue du code à remplacer."
                         )
+                        if isinstance(diagnostics, dict):
+                            diagnostics["rejected_blocks"].append({
+                                "file_path": current_file,
+                                "line_num": active_block_info["line_num"] if active_block_info else line_idx,
+                                "reason": error_msg,
+                                "search_content": search_str[:200] + "..." if len(search_str) > 200 else search_str
+                            })
                         
                     blocks.append({
                         "file_path": current_file,
@@ -239,14 +285,22 @@ class CodeEditor:
                     })
                 state = "seeking"
                 current_file = None
+                active_block_info = None
                 continue
                 
             # Accumulation du contenu selon l'état actuel (préservation des espaces)
             if state == "search":
                 search_lines.append(line)
+                if active_block_info and len(active_block_info["search_preview"]) < 100:
+                    active_block_info["search_preview"] += (line + "\n")[:100 - len(active_block_info["search_preview"])]
             elif state == "replace":
                 replace_lines.append(line)
+                if active_block_info and len(active_block_info["replace_preview"]) < 100:
+                    active_block_info["replace_preview"] += (line + "\n")[:100 - len(active_block_info["replace_preview"])]
                 
+        if active_block_info and isinstance(diagnostics, dict):
+            diagnostics["incomplete_blocks"].append(active_block_info)
+            
         return blocks
 
     def _create_backup(self, file_path):

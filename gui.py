@@ -2007,7 +2007,7 @@ Note : Shift + Entrée pour un saut de ligne."""
         """Affiche une boîte de dialogue pour configurer la mémoire et la taille du contexte."""
         dialog = tk.Toplevel(self.root)
         dialog.title("Réglages du Contexte")
-        dialog.geometry("450x300")
+        dialog.geometry("450x380")
         dialog.configure(bg="#1e1e1e")
         dialog.transient(self.root)
         dialog.grab_set()
@@ -2073,7 +2073,26 @@ Note : Shift + Entrée pour un saut de ligne."""
             relief="flat",
             bd=0
         )
-        chk_ollama.pack(anchor="w", padx=20, pady=(0, 15))
+        chk_ollama.pack(anchor="w", padx=20, pady=(0, 10))
+
+        # Choix de la taille du contexte Ollama en tokens
+        from config import DEFAULT_MODEL_CONTEXT_SIZE
+        current_model_ctx = self.ctrl.settings.get_setting("model_context_size", DEFAULT_MODEL_CONTEXT_SIZE)
+        
+        ctx_label = tk.Label(dialog, text="Fenêtre de contexte Ollama active (tokens) :", bg="#1e1e1e", fg="#e0e0e0", anchor="w")
+        ctx_label.pack(fill="x", padx=20, pady=(5, 0))
+        
+        ctx_options = [2048, 4096, 8192, 16384, 32768, 65536]
+        ctx_var = tk.IntVar(value=current_model_ctx)
+        
+        if current_model_ctx not in ctx_options:
+            ctx_options.append(current_model_ctx)
+            ctx_options.sort()
+            
+        ctx_menu = tk.OptionMenu(dialog, ctx_var, *ctx_options)
+        ctx_menu.configure(bg="#333333", fg="white", activebackground="#444444", activeforeground="white", relief="flat", highlightthickness=0, bd=0)
+        ctx_menu["menu"].configure(bg="#333333", fg="white", activebackground="#03dac6", activeforeground="black")
+        ctx_menu.pack(anchor="w", padx=20, pady=(5, 10))
 
         # Boutons Sauvegarder et Fermer
         btn_frame = tk.Frame(dialog, bg="#1e1e1e")
@@ -2083,6 +2102,7 @@ Note : Shift + Entrée pour un saut de ligne."""
             self.ctrl.settings.set_setting("history_context_size", int(scale.get()))
             self.ctrl.settings.set_setting("enable_compressed_context", enable_var.get())
             self.ctrl.settings.set_setting("enable_auto_ollama", auto_ollama_var.get())
+            self.ctrl.settings.set_setting("model_context_size", int(ctx_var.get()))
             messagebox.showinfo("Succès", "Configuration du contexte sauvegardée avec succès !", parent=dialog)
             dialog.destroy()
 

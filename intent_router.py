@@ -39,7 +39,17 @@ JSON :"""
             sys_trace_callback(f"[Appel LLM] Lancement : routage d'intention\n  - Modèle : {self.model}\n  - Rôle : get_file_intent")
         start_time = time.time()
         try:
-            response = ollama.chat(model=self.model, messages=[{'role': 'user', 'content': prompt}])
+            # Charger la configuration globale du contexte
+            from config import DEFAULT_MODEL_CONTEXT_SIZE
+            active_ctx = DEFAULT_MODEL_CONTEXT_SIZE
+            try:
+                from settings_manager import SettingsManager
+                settings = SettingsManager()
+                active_ctx = settings.get_setting("model_context_size", DEFAULT_MODEL_CONTEXT_SIZE)
+            except Exception:
+                pass
+            options = {"num_ctx": active_ctx}
+            response = ollama.chat(model=self.model, messages=[{'role': 'user', 'content': prompt}], options=options)
             duration = time.time() - start_time
             raw_content = response['message']['content'].strip()
             
@@ -145,7 +155,17 @@ JSON :"""
             sys_trace_callback(f"[Appel LLM] Lancement : résolution contexte\n  - Modèle : {self.model}\n  - Rôle : resolve_context_required\n  - Scan projet : {len(available_files)} fichiers référencés dans le prompt")
         start_time = time.time()
         try:
-            response = ollama.chat(model=self.model, messages=[{'role': 'user', 'content': prompt}])
+            # Charger la configuration globale du contexte
+            from config import DEFAULT_MODEL_CONTEXT_SIZE
+            active_ctx = DEFAULT_MODEL_CONTEXT_SIZE
+            try:
+                from settings_manager import SettingsManager
+                settings = SettingsManager()
+                active_ctx = settings.get_setting("model_context_size", DEFAULT_MODEL_CONTEXT_SIZE)
+            except Exception:
+                pass
+            options = {"num_ctx": active_ctx}
+            response = ollama.chat(model=self.model, messages=[{'role': 'user', 'content': prompt}], options=options)
             duration = time.time() - start_time
             raw_content = response['message']['content'].strip()
             

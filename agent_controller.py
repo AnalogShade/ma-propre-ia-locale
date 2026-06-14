@@ -490,6 +490,7 @@ Règles strictes :
             sys_trace_callback(f"=== FIN PRÉPARATION DU CONTEXTE (Durée totale : {prep_duration:.2f}s) ===")
             sys_trace_callback(f"[Appel LLM] Lancement : génération de la réponse (Modèle : {self.engine.model})...")
 
+        first_ollama_diag = {}
         response = self.engine.get_response(
             context,
             images=images,
@@ -500,7 +501,8 @@ Règles strictes :
             compressed_context=compressed_context,
             chunk_callback=chunk_callback,
             status_callback=status_callback,
-            on_start_callback=on_start_callback
+            on_start_callback=on_start_callback,
+            ollama_diagnostics=first_ollama_diag
         )
         
         if status_callback:
@@ -535,9 +537,58 @@ Règles strictes :
         if not clean_response.strip():
             clean_response = "[La réponse a été interrompue durant la réflexion]"
 
+        # Collecte de diagnostics (Phase 1)
+        raw_len = len(response) if response else 0
+        clean_len = len(clean_response) if clean_response else 0
+        
+        diag_data = {
+            "raw_length": raw_len,
+            "clean_length": clean_len,
+            "raw_markers_file": 0,
+            "raw_markers_search": 0,
+            "raw_markers_sep": 0,
+            "raw_markers_replace": 0,
+            "raw_markers_create": 0,
+            "raw_markers_create_end": 0,
+            "incomplete_blocks": [],
+            "rejected_blocks": [],
+            "first_pass_create_blocks": 0,
+            "first_pass_edit_blocks": 0,
+            "retry_triggered": False,
+            "retry_raw_length": 0,
+            "retry_clean_length": 0,
+            "retry_create_blocks": 0,
+            "retry_edit_blocks": 0,
+            "retry_diagnostics": None,
+            "first_ollama_diagnostics": first_ollama_diag,
+            "retry_ollama_diagnostics": None
+        }
+
         # Première analyse des propositions de modifications de fichiers
-        create_blocks = self.editor.parse_create_blocks(clean_response)
-        edit_blocks = self.editor.parse_search_replace_blocks(clean_response, working_dir=self.files.working_dir)
+        first_diag = {
+            "raw_markers_file": 0,
+            "raw_markers_search": 0,
+            "raw_markers_sep": 0,
+            "raw_markers_replace": 0,
+            "raw_markers_create": 0,
+            "raw_markers_create_end": 0,
+            "incomplete_blocks": [],
+            "rejected_blocks": []
+        }
+        create_blocks = self.editor.parse_create_blocks(clean_response, diagnostics=first_diag)
+        edit_blocks = self.editor.parse_search_replace_blocks(clean_response, working_dir=self.files.working_dir, diagnostics=first_diag)
+        
+        diag_data["raw_markers_file"] = first_diag["raw_markers_file"]
+        diag_data["raw_markers_search"] = first_diag["raw_markers_search"]
+        diag_data["raw_markers_sep"] = first_diag["raw_markers_sep"]
+        diag_data["raw_markers_replace"] = first_diag["raw_markers_replace"]
+        diag_data["raw_markers_create"] = first_diag["raw_markers_create"]
+        diag_data["raw_markers_create_end"] = first_diag["raw_markers_create_end"]
+        diag_data["incomplete_blocks"] = list(first_diag["incomplete_blocks"])
+        diag_data["rejected_blocks"] = list(first_diag["rejected_blocks"])
+        diag_data["first_pass_create_blocks"] = len(create_blocks)
+        diag_data["first_pass_edit_blocks"] = len(edit_blocks)
+
         print(f"  [PATCH DETECTION] Blocs détectés dans la réponse : {len(create_blocks)} création(s), {len(edit_blocks)} modification(s)")
         for block in edit_blocks:
             status = "INVALID" if block.get("invalid") else "VALID"
@@ -547,6 +598,7 @@ Règles strictes :
         has_invalid = any(block.get("invalid") for block in edit_blocks)
         if has_invalid:
             print("  [SAFETY PATCH] Détection de blocs de modification invalides (omissions/placeholders). Lancement de la boucle de correction automatique (max 1 tentative)...")
+            diag_data["retry_triggered"] = True
             
             correction_user_msg = (
                 "Attention, une ou plusieurs des modifications proposées ont été rejetées car un bloc SEARCH contient des ellipses, "
@@ -566,6 +618,7 @@ Règles strictes :
             if status_callback:
                 status_callback("Correction du patch en cours...")
                 
+            retry_ollama_diag = {}
             retry_response = self.engine.get_response(
                 temp_context,
                 images=images,
@@ -576,7 +629,8 @@ Règles strictes :
                 compressed_context=compressed_context,
                 chunk_callback=None,  # Pas de streaming pour la correction automatique
                 status_callback=status_callback,
-                on_start_callback=on_start_callback
+                on_start_callback=on_start_callback,
+                ollama_diagnostics=retry_ollama_diag
             )
             
             if retry_response:
@@ -591,13 +645,150 @@ Règles strictes :
                     clean_retry = "[La réponse a été interrompue durant la réflexion]"
                 
                 clean_response = clean_retry
+                
                 # Ré-analyser les blocs à partir de la réponse corrigée
-                create_blocks = self.editor.parse_create_blocks(clean_response)
-                edit_blocks = self.editor.parse_search_replace_blocks(clean_response, working_dir=self.files.working_dir)
+                retry_diag = {
+                    "raw_markers_file": 0,
+                    "raw_markers_search": 0,
+                    "raw_markers_sep": 0,
+                    "raw_markers_replace": 0,
+                    "raw_markers_create": 0,
+                    "raw_markers_create_end": 0,
+                    "incomplete_blocks": [],
+                    "rejected_blocks": []
+                }
+                diag_data["retry_raw_length"] = len(retry_response)
+                diag_data["retry_clean_length"] = len(clean_retry)
+                
+                create_blocks = self.editor.parse_create_blocks(clean_response, diagnostics=retry_diag)
+                edit_blocks = self.editor.parse_search_replace_blocks(clean_response, working_dir=self.files.working_dir, diagnostics=retry_diag)
+                
+                diag_data["retry_create_blocks"] = len(create_blocks)
+                diag_data["retry_edit_blocks"] = len(edit_blocks)
+                diag_data["retry_diagnostics"] = retry_diag
+                diag_data["retry_ollama_diagnostics"] = retry_ollama_diag
+                
                 print(f"  [PATCH DETECTION] Blocs après correction automatique : {len(create_blocks)} création(s), {len(edit_blocks)} modification(s)")
                 for block in edit_blocks:
                     status = "INVALID" if block.get("invalid") else "VALID"
                     print(f"  [PATCH VALIDATION] Bloc modification pour '{block['file_path']}' - Statut : {status}")
+
+        # Construction du rapport d'instrumentation (Phase 1 & 1C)
+        first_ctx = first_ollama_diag.get("model_ctx")
+        first_predict = first_ollama_diag.get("model_predict")
+        first_native_ctx = first_ollama_diag.get("model_native_ctx")
+        first_input_tokens = first_ollama_diag.get("prompt_eval_count")
+        first_generated_tokens = first_ollama_diag.get("eval_count")
+        
+        total_tokens = None
+        if first_input_tokens is not None and first_generated_tokens is not None:
+            total_tokens = first_input_tokens + first_generated_tokens
+
+        ratio_str = "Inconnu"
+        active_limit = first_ctx if first_ctx else 4096
+        if total_tokens and active_limit:
+            ratio_str = f"{(total_tokens / active_limit) * 100:.1f}% ({total_tokens} / {active_limit} tokens)"
+        elif first_input_tokens:
+            ratio_str = f"Inconnu (contexte non défini par défaut dans le modèle, prompt: {first_input_tokens} tokens)"
+
+        saturation_alert = ""
+        done_reason = first_ollama_diag.get('done_reason')
+        if done_reason == "length" or (total_tokens and total_tokens >= active_limit):
+            saturation_alert = f"\n      * [ATTENTION: SATURATION DU CONTEXTE] La limite active de contexte ({active_limit} tokens) a été atteinte (Total: {total_tokens} tokens)."
+
+        report_lines = [
+            "\n[INSTRUMENTATION MINIMALE - PHASE 1 & 1C]",
+            f"  - Longueur de réponse brute Ollama : {diag_data['raw_length']} caractères",
+            f"  - Longueur après nettoyage <think> : {diag_data['clean_length']} caractères",
+            f"  - Métadonnées de génération Ollama (1ère passe) :",
+            f"      * done : {first_ollama_diag.get('done')}",
+            f"      * done_reason : {done_reason}{saturation_alert}",
+            f"      * tokens d'entrée (prompt_eval_count) : {first_input_tokens}",
+            f"      * tokens générés (eval_count) : {first_generated_tokens}",
+            f"      * total des tokens (prompt + générés) : {total_tokens if total_tokens is not None else 'N/A'}",
+            f"      * exception éventuelle : {first_ollama_diag.get('exception')}",
+            f"      * num_ctx effectif du modèle : {first_ctx if first_ctx else 'Non spécifié (4096 ou 2048 par défaut)'}",
+            f"      * num_predict effectif du modèle : {first_predict if first_predict is not None else 'Non spécifié (génération illimitée / EOS)'}",
+            f"      * capacité de contexte native du modèle : {first_native_ctx if first_native_ctx else 'Inconnue'}",
+            f"      * ratio d'utilisation du contexte : {ratio_str}",
+            f"      * durée totale de génération (s) : {first_ollama_diag.get('total_duration') / 1e9 if first_ollama_diag.get('total_duration') else 'N/A'}",
+            f"  - Compte de marqueurs détectés :",
+            f"      * FILE: {diag_data['raw_markers_file']}",
+            f"      * <<<<<<< SEARCH: {diag_data['raw_markers_search']}",
+            f"      * =======: {diag_data['raw_markers_sep']}",
+            f"      * >>>>>>> REPLACE: {diag_data['raw_markers_replace']}",
+            f"      * <<<<<<< CREATE: {diag_data['raw_markers_create']}",
+            f"      * >>>>>>> CREATE: {diag_data['raw_markers_create_end']}",
+            f"  - Blocs d'édition complets (1ère passe) : {diag_data['first_pass_edit_blocks']}",
+            f"  - Blocs de création complets (1ère passe) : {diag_data['first_pass_create_blocks']}",
+            f"  - Blocs incomplets détectés : {len(diag_data['incomplete_blocks'])}"
+        ]
+        
+        for idx, inc in enumerate(diag_data["incomplete_blocks"], 1):
+            report_lines.append(
+                f"      * Bloc #{idx} : État final '{inc['state']}' pour le fichier '{inc['file_path']}' à la ligne {inc['line_num']}"
+            )
+            if "search_preview" in inc and inc["search_preview"]:
+                preview = repr(inc["search_preview"][:50])
+                report_lines.append(f"        Aperçu SEARCH: {preview}")
+            if "replace_preview" in inc and inc["replace_preview"]:
+                preview = repr(inc["replace_preview"][:50])
+                report_lines.append(f"        Aperçu REPLACE: {preview}")
+            if "preview" in inc and inc["preview"]:
+                preview = repr(inc["preview"][:50])
+                report_lines.append(f"        Aperçu CREATE: {preview}")
+ 
+        report_lines.append(f"  - Blocs rejetés pour placeholders/erreurs : {len(diag_data['rejected_blocks'])}")
+        for idx, rej in enumerate(diag_data["rejected_blocks"], 1):
+            report_lines.append(
+                f"      * Bloc #{idx} : Rejeté pour '{rej['reason']}' dans '{rej['file_path']}' à la ligne {rej['line_num']}"
+            )
+ 
+        report_lines.append(f"  - Boucle d'auto-correction déclenchée : {'OUI' if diag_data['retry_triggered'] else 'NON'}")
+        if diag_data["retry_triggered"]:
+            retry_diag_info = diag_data["retry_ollama_diagnostics"]
+            retry_ratio = "Inconnu"
+            retry_total_tokens = None
+            if retry_diag_info:
+                ret_ctx = retry_diag_info.get("model_ctx")
+                ret_in_tokens = retry_diag_info.get("prompt_eval_count")
+                ret_gen_tokens = retry_diag_info.get("eval_count")
+                if ret_in_tokens is not None and ret_gen_tokens is not None:
+                    retry_total_tokens = ret_in_tokens + ret_gen_tokens
+                ret_active_limit = ret_ctx if ret_ctx else 4096
+                if retry_total_tokens and ret_active_limit:
+                    retry_ratio = f"{(retry_total_tokens / ret_active_limit) * 100:.1f}% ({retry_total_tokens} / {ret_active_limit} tokens)"
+            
+            report_lines.extend([
+                f"      * Longueur de réponse brute (retry) : {diag_data['retry_raw_length']} caractères",
+                f"      * Longueur après nettoyage (retry) : {diag_data['retry_clean_length']} caractères",
+                f"      * Métadonnées de génération (retry) :",
+                f"          + done : {retry_diag_info.get('done') if retry_diag_info else 'N/A'}",
+                f"          + done_reason : {retry_diag_info.get('done_reason') if retry_diag_info else 'N/A'}",
+                f"          + tokens d'entrée (prompt_eval_count) : {retry_diag_info.get('prompt_eval_count') if retry_diag_info else 'N/A'}",
+                f"          + tokens générés (eval_count) : {retry_diag_info.get('eval_count') if retry_diag_info else 'N/A'}",
+                f"          + total des tokens (retry) : {retry_total_tokens if retry_total_tokens is not None else 'N/A'}",
+                f"          + ratio d'utilisation du contexte : {retry_ratio}",
+                f"          + exception éventuelle : {retry_diag_info.get('exception') if retry_diag_info else 'N/A'}",
+                f"      * Blocs d'édition complets (retry) : {diag_data['retry_edit_blocks']}",
+                f"      * Blocs de création complets (retry) : {diag_data['retry_create_blocks']}",
+                "      * Remplacement de la réponse originale par le correctif : OUI"
+            ])
+            if diag_data["retry_diagnostics"]:
+                rd = diag_data["retry_diagnostics"]
+                report_lines.extend([
+                    f"      * Incomplets (retry) : {len(rd['incomplete_blocks'])}",
+                    f"      * Rejetés (retry) : {len(rd['rejected_blocks'])}"
+                ])
+        
+        report_lines.append("[FIN INSTRUMENTATION]\n")
+        report_str = "\n".join(report_lines)
+        
+        # Envoi aux logs et traces
+        from config import log_diagnostic
+        log_diagnostic(report_str)
+        if sys_trace_callback:
+            sys_trace_callback(report_str)
 
         # Détection des propositions de commandes système
         command_blocks = self.command_runner.parse_command_blocks(clean_response)

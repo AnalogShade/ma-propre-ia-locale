@@ -305,7 +305,7 @@ class AIEngine:
             print(f"\n[DEBUG: Impossible de joindre Ollama pour lister les modèles -> {e}]")
             return []
 
-    def get_response(self, context_messages, images=None, user_summary="", assistant_summary="", assistant_name=DEFAULT_NAME, files_context="", compressed_context="", model_name=None, chunk_callback=None, status_callback=None, on_start_callback=None):
+    def get_response(self, context_messages, images=None, user_summary="", assistant_summary="", assistant_name=DEFAULT_NAME, files_context="", compressed_context="", model_name=None, chunk_callback=None, status_callback=None, on_start_callback=None, ollama_diagnostics=None):
         try:
             # 1. Construction du prompt système
             system_content = self.system_prompt.strip().format(name=assistant_name)
@@ -341,6 +341,79 @@ class AIEngine:
             target_model = model_name if model_name else self.model
             _safe_print(f"\n[DIAGNOSTIC] FULL PAYLOAD TO OLLAMA (Model: {target_model}):\n{messages}\n")
 
+            # Charger la configuration globale du contexte
+            from config import DEFAULT_MODEL_CONTEXT_SIZE
+            active_ctx = DEFAULT_MODEL_CONTEXT_SIZE
+            try:
+                from settings_manager import SettingsManager
+                settings = SettingsManager()
+                active_ctx = settings.get_setting("model_context_size", DEFAULT_MODEL_CONTEXT_SIZE)
+            except Exception:
+                pass
+            options = {"num_ctx": active_ctx}
+
+            # Phase 1C : Récupération de la configuration effective du modèle (ctx natif et num_predict)
+            model_ctx = None
+            model_predict = None
+            model_native_ctx = None
+            model_parameters = None
+            model_modelfile = ""
+            try:
+                show_info = ollama.show(model=target_model)
+                model_modelfile = getattr(show_info, "modelfile", None) or (show_info.get("modelfile", "") if hasattr(show_info, "get") else "")
+                
+                # Chercher num_ctx et num_predict dans le modelfile
+                import re
+                ctx_match = re.search(r"PARAMETER\s+num_ctx\s+(\d+)", model_modelfile, re.IGNORECASE)
+                if ctx_match:
+                    model_ctx = int(ctx_match.group(1))
+                
+                predict_match = re.search(r"PARAMETER\s+num_predict\s+(-?\d+)", model_modelfile, re.IGNORECASE)
+                if predict_match:
+                    model_predict = int(predict_match.group(1))
+                
+                # Chercher dans les paramètres
+                params_str = getattr(show_info, "parameters", None) or (show_info.get("parameters", "") if hasattr(show_info, "get") else "")
+                if params_str:
+                    model_parameters = params_str
+                    if not model_ctx:
+                        ctx_match = re.search(r"num_ctx\s+(\d+)", params_str, re.IGNORECASE)
+                        if ctx_match:
+                            model_ctx = int(ctx_match.group(1))
+                    if not model_predict:
+                        predict_match = re.search(r"num_predict\s+(-?\d+)", params_str, re.IGNORECASE)
+                        if predict_match:
+                            model_predict = int(predict_match.group(1))
+
+                # Extraire le contexte natif du modèle
+                model_info_dict = {}
+                if hasattr(show_info, "modelinfo") and show_info.modelinfo:
+                    model_info_dict = show_info.modelinfo
+                elif isinstance(show_info, dict) and "modelinfo" in show_info:
+                    model_info_dict = show_info["modelinfo"]
+                elif isinstance(show_info, dict) and "model_info" in show_info:
+                    model_info_dict = show_info["model_info"]
+
+                for key, val in model_info_dict.items():
+                    if key.endswith(".context_length"):
+                        model_native_ctx = val
+                        break
+            except Exception as show_err:
+                log_diagnostic(f"[DIAGNOSTIC ENGINE WARNING] Échec de l'interrogation de ollama.show : {show_err}")
+
+            if isinstance(ollama_diagnostics, dict):
+                ollama_diagnostics["done"] = False
+                ollama_diagnostics["done_reason"] = "incomplete"
+                ollama_diagnostics["prompt_eval_count"] = None
+                ollama_diagnostics["eval_count"] = None
+                ollama_diagnostics["model_ctx"] = model_ctx
+                ollama_diagnostics["model_predict"] = model_predict
+                ollama_diagnostics["model_native_ctx"] = model_native_ctx
+                ollama_diagnostics["model_modelfile"] = model_modelfile
+                ollama_diagnostics["model_parameters"] = model_parameters
+                ollama_diagnostics["exception"] = None
+                ollama_diagnostics["total_duration"] = None
+
             # 3. Appel Ollama (avec support streaming et fallback)
             if status_callback:
                 status_callback("Envoi au modèle...")
@@ -351,7 +424,7 @@ class AIEngine:
                 try:
                     if status_callback:
                         status_callback("Réflexion du modèle...")
-                    stream = client.chat(model=target_model, messages=messages, stream=True)
+                    stream = client.chat(model=target_model, messages=messages, stream=True, options=options)
                     
                     if on_start_callback:
                         try:
@@ -390,6 +463,18 @@ class AIEngine:
                                 sent_think_end = True
                             chunk_callback(content_text)
                             response_text += content_text
+
+                        # Phase 1B: Capture des métadonnées du dernier chunk
+                        if chunk.get("done"):
+                            if isinstance(ollama_diagnostics, dict):
+                                ollama_diagnostics["done"] = True
+                                ollama_diagnostics["done_reason"] = chunk.get("done_reason")
+                                ollama_diagnostics["prompt_eval_count"] = chunk.get("prompt_eval_count")
+                                ollama_diagnostics["eval_count"] = chunk.get("eval_count")
+                                ollama_diagnostics["total_duration"] = chunk.get("total_duration")
+                                ollama_diagnostics["load_duration"] = chunk.get("load_duration")
+                                ollama_diagnostics["prompt_eval_duration"] = chunk.get("prompt_eval_duration")
+                                ollama_diagnostics["eval_duration"] = chunk.get("eval_duration")
                             
                     # Clôture de sécurité
                     if sent_think_start and not sent_think_end:
@@ -398,6 +483,8 @@ class AIEngine:
                         
                 except Exception as stream_err:
                     _safe_print(f"\n[DEBUG: Échec du streaming, repli en mode synchrone -> {stream_err}]")
+                    if isinstance(ollama_diagnostics, dict):
+                        ollama_diagnostics["exception"] = f"Streaming error: {type(stream_err).__name__}: {stream_err}"
                     # Si c'est un timeout, on le propage immédiatement
                     import httpx
                     if isinstance(stream_err, httpx.TimeoutException):
@@ -407,7 +494,18 @@ class AIEngine:
                         
                     if status_callback:
                         status_callback("Réflexion du modèle (Repli synchrone)...")
-                    response = client.chat(model=target_model, messages=messages)
+                    response = client.chat(model=target_model, messages=messages, options=options)
+                    
+                    if isinstance(ollama_diagnostics, dict):
+                        ollama_diagnostics["done"] = response.get("done", True)
+                        ollama_diagnostics["done_reason"] = response.get("done_reason")
+                        ollama_diagnostics["prompt_eval_count"] = response.get("prompt_eval_count")
+                        ollama_diagnostics["eval_count"] = response.get("eval_count")
+                        ollama_diagnostics["total_duration"] = response.get("total_duration")
+                        ollama_diagnostics["load_duration"] = response.get("load_duration")
+                        ollama_diagnostics["prompt_eval_duration"] = response.get("prompt_eval_duration")
+                        ollama_diagnostics["eval_duration"] = response.get("eval_duration")
+
                     if on_start_callback:
                         try:
                             on_start_callback()
@@ -425,7 +523,18 @@ class AIEngine:
             else:
                 if status_callback:
                     status_callback("Réflexion du modèle...")
-                response = client.chat(model=target_model, messages=messages)
+                response = client.chat(model=target_model, messages=messages, options=options)
+                
+                if isinstance(ollama_diagnostics, dict):
+                    ollama_diagnostics["done"] = response.get("done", True)
+                    ollama_diagnostics["done_reason"] = response.get("done_reason")
+                    ollama_diagnostics["prompt_eval_count"] = response.get("prompt_eval_count")
+                    ollama_diagnostics["eval_count"] = response.get("eval_count")
+                    ollama_diagnostics["total_duration"] = response.get("total_duration")
+                    ollama_diagnostics["load_duration"] = response.get("load_duration")
+                    ollama_diagnostics["prompt_eval_duration"] = response.get("prompt_eval_duration")
+                    ollama_diagnostics["eval_duration"] = response.get("eval_duration")
+
                 if on_start_callback:
                     try:
                         on_start_callback()
@@ -446,6 +555,8 @@ class AIEngine:
         except Exception as e:
             _safe_print(f"\n[DEBUG: Erreur critique Ollama -> {e}]")
             log_diagnostic(f"[DIAGNOSTIC ENGINE ERROR] Erreur lors de l'appel Ollama : {e}")
+            if isinstance(ollama_diagnostics, dict):
+                ollama_diagnostics["exception"] = f"Critical error: {type(e).__name__}: {e}"
             try:
                 import httpx
                 if isinstance(e, httpx.TimeoutException):
@@ -484,7 +595,17 @@ class AIEngine:
         5. SI AUCUNE INFORMATION DURABLE OU EN CAS DE DOUTE : R\u00e9ponds "None" sans rien d'autre.
         """
         try:
-            response = self._get_client().generate(model=self.model, prompt=prompt)
+            # Charger la configuration globale du contexte
+            from config import DEFAULT_MODEL_CONTEXT_SIZE
+            active_ctx = DEFAULT_MODEL_CONTEXT_SIZE
+            try:
+                from settings_manager import SettingsManager
+                settings = SettingsManager()
+                active_ctx = settings.get_setting("model_context_size", DEFAULT_MODEL_CONTEXT_SIZE)
+            except Exception:
+                pass
+            options = {"num_ctx": active_ctx}
+            response = self._get_client().generate(model=self.model, prompt=prompt, options=options)
             content = response['response'].strip()
             if "None" in content or "{" not in content:
                 return None

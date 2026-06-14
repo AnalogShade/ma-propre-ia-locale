@@ -3,6 +3,7 @@
 DEFAULT_MODEL_NAME = "llama3"
 MODEL_NAME = DEFAULT_MODEL_NAME  # Rétrocompatibilité des imports existants
 DEFAULT_NAME = "Antis"
+DEFAULT_MODEL_CONTEXT_SIZE = 8192
 
 # Configuration de la vision et de la gestion de performance
 VISION_IMAGE_MAX_SIZE = 768
