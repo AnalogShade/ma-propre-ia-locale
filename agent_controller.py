@@ -52,6 +52,34 @@ class AgentController:
         # 3. Initialisation du gestionnaire de génération d'images (MVC)
         self.image_manager = ImageGenerationManager(self.engine)
 
+    def detect_working_mode(self, user_input, intent_action):
+        """
+        Détermine dynamiquement le mode de travail (CHAT ou CODE)
+        et fournit la raison de cette classification.
+        """
+        # 1. Règle absolue : si un ou plusieurs fichiers sont ouverts dans le workspace
+        if self.files.loaded_files:
+            return "CODE", "Fichier(s) ouvert(s) dans le workspace."
+            
+        # 2. Règle sémantique : si l'action du routeur concerne le contexte de fichiers ou la recherche
+        if intent_action in ["load_context", "open_file", "reload_file", "search"]:
+            return "CODE", f"Intention technique détectée par le routeur ({intent_action})."
+            
+        # 3. Règle heuristique : mots-clés techniques
+        import re
+        technical_keywords = {
+            "code", "python", "classe", "class", "fonction", "def", "import", "bug", "erreur", 
+            "error", "corriger", "corrige", "modifier", "script", "programme", "développer", 
+            "compil", "fichiers", "git", "main.py", "tic-tac-toe", "tic tac toe", "jeu", "boucle"
+        }
+        # Normalisation simple du texte
+        words = set(re.sub(r"[^\w\s]", " ", user_input.lower()).split())
+        matched = words.intersection(technical_keywords)
+        if matched:
+            return "CODE", f"Mots-clés techniques détectés dans le message : {', '.join(matched)}."
+            
+        return "CHAT", "Aucun fichier ouvert, intention neutre et absence de termes techniques."
+
     def start_image_session(self):
         """
         Démarre une nouvelle session interactive de génération d'images.
@@ -462,6 +490,24 @@ Règles strictes :
         self.memory.add_message("user", user_input)
         context = self.memory.get_context(context_size)
         
+        # === ÉTAPE 1 : DÉTECTION ADAPTATIVE DU CONTEXTE (SQUELETTE DE LA PHASE 1) ===
+        intent_action = intent_result.get("action") if isinstance(intent_result, dict) else None
+        active_mode, mode_reason = self.detect_working_mode(user_input, intent_action)
+        
+        # Enregistrement et log diagnostique
+        mode_diag_report = (
+            f"\n[DIAGNOSTIC ADAPTATIF - PHASE 1]\n"
+            f"  - Mode détecté : {active_mode}\n"
+            f"  - Raison : {mode_reason}\n"
+            f"  - Action active du routeur : {intent_action}\n"
+            f"  - Fichiers ouverts dans le workspace : {list(self.files.loaded_files.keys())}\n"
+        )
+        print(mode_diag_report)
+        from config import log_diagnostic
+        log_diagnostic(mode_diag_report)
+        if sys_trace_callback:
+            sys_trace_callback(mode_diag_report)
+
         # Dimensionnement et diagnostic du prompt final
         sys_prompt_base = self.engine.system_prompt.strip().format(name=assistant_name)
         sys_chars = len(sys_prompt_base)

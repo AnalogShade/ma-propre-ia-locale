@@ -171,7 +171,7 @@ class TestVisionOptimizations(unittest.TestCase):
         original_get_client = self.engine._get_client
         
         class MockClient:
-            def chat(self, model, messages, stream=False):
+            def chat(self, model, messages, stream=False, options=None):
                 if stream:
                     def generator():
                         yield {"message": {"content": "Hello"}}
