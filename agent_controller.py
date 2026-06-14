@@ -314,6 +314,7 @@ Règles strictes :
             return self.image_manager.process_user_message(user_input, self.engine)
 
         original_system_prompt = self.engine.system_prompt
+        plan_text = ""
 
         if sys_trace_callback:
             sys_trace_callback("=== DÉBUT PRÉPARATION DU CONTEXTE ===")
@@ -611,6 +612,41 @@ Règles strictes :
         from config import SYSTEM_PROMPT_CODE
         if active_mode == "CODE":
             self.engine.system_prompt = SYSTEM_PROMPT_CODE
+            
+            # --- ÉTAPE A : PLANIFICATION TECHNIQUE MULTI-PASSES ---
+            if status_callback:
+                status_callback("Élaboration du plan technique...")
+            try:
+                from planning_agent import PlanningAgent
+                plan_text = PlanningAgent.generate_plan(
+                    engine=self.engine,
+                    context_messages=context,
+                    files_context=files_context,
+                    user_summary=user_summary,
+                    assistant_summary=assistant_summary,
+                    assistant_name=assistant_name
+                )
+                
+                # Injection du plan dans la zone diagnostic système existante
+                if sys_trace_callback and plan_text:
+                    planning_trace = (
+                        f"\n[DIAGNOSTIC AGENT - PLAN TECHNIQUE PROPOSÉ]\n"
+                        f"{plan_text}\n"
+                        f"[FIN DU PLAN]\n"
+                    )
+                    sys_trace_callback(planning_trace)
+                    
+                # Injection du plan technique comme consigne technique prioritaire pour l'appel d'édition principal
+                if plan_text:
+                    plan_injection = (
+                        f"\n\n--- PLAN TECHNIQUE À SUIVRE IMPÉRATIVEMENT ---\n"
+                        f"{plan_text}\n"
+                        f"Consigne : Exécute scrupuleusement le plan ci-dessus pour formuler ta réponse et tes modifications.\n"
+                        f"-----------------------------------------------\n"
+                    )
+                    files_context += plan_injection
+            except Exception as pe:
+                print(f"[PLANNING ERROR] Échec de la génération du plan : {pe}")
 
         # Dimensionnement et diagnostic du prompt final
         sys_prompt_base = self.engine.system_prompt.strip().format(name=assistant_name)
@@ -953,9 +989,14 @@ Règles strictes :
             status = "INVALID" if block.get("invalid") else "VALID"
             print(f"  [COMMAND VALIDATION] Commande '{block['command']}' - Statut : {status}")
 
-        # Enregistrement de la réponse propre (et corrigée le cas échéant) dans l'historique
+        # Enregistrement de la réponse propre (et corrigée le cas échéant) dans l'historique (sans le plan pour ne pas polluer l'historique de chat)
         self.memory.add_message("assistant", clean_response)
         
+        # Préfixer le plan à la réponse finale affichée dans le chat / console
+        clean_response_with_plan = clean_response
+        if plan_text:
+            clean_response_with_plan = plan_text + "\n\n" + clean_response
+            
         # Détection d'émotion associée sur la réponse propre
         emotion = "neutral"
         try:
@@ -967,7 +1008,7 @@ Règles strictes :
         self.engine.system_prompt = original_system_prompt
         return {
             "type": "ai_response",
-            "content": clean_response,
+            "content": clean_response_with_plan,
             "emotion": emotion,
             "create_blocks": create_blocks,
             "edit_blocks": edit_blocks,
