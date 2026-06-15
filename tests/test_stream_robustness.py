@@ -224,6 +224,24 @@ class TestStreamRobustness(unittest.TestCase):
         self.assertEqual(captured_callbacks[0], chunk_cb)
         self.assertIsNone(captured_callbacks[1])
 
+    @patch('ollama.Client')
+    def test_controller_timeout_message(self, mock_client_class):
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
+        
+        import httpx
+        mock_client.chat.side_effect = httpx.TimeoutException("Mocked timeout")
+        
+        self.ctrl.memory.clear()
+        
+        result = self.ctrl.process_user_message_sync("hello")
+        
+        content = result.get("content")
+        self.assertIn("expiré (timeout)", content)
+        self.assertIn("VRAM swapping", content)
+        self.assertIn("ollama_request_timeout", content)
+        self.assertEqual(result.get("type"), "text")
+
 if __name__ == '__main__':
     unittest.main()
 

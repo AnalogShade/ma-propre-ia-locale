@@ -8,7 +8,9 @@ DEFAULT_MODEL_CONTEXT_SIZE = 8192
 # Configuration de la vision et de la gestion de performance
 VISION_IMAGE_MAX_SIZE = 768
 VISION_IMAGE_JPEG_QUALITY = 85
-OLLAMA_REQUEST_TIMEOUT_SECONDS = 60
+# Timeout par défaut augmenté pour tolérer les chargements et swapping de modèles
+DEFAULT_OLLAMA_REQUEST_TIMEOUT_SECONDS = 120
+OLLAMA_REQUEST_TIMEOUT_SECONDS = DEFAULT_OLLAMA_REQUEST_TIMEOUT_SECONDS
 
 # Seuils d'évaluation du risque vision/VRAM
 VISION_IMAGE_LARGE_THRESHOLD_PX = 600        # Seuil en pixels de la dimension max pour considérer une image comme grande

@@ -677,19 +677,39 @@ Règles strictes :
             sys_trace_callback(f"[Appel LLM] Lancement : génération de la réponse (Modèle : {self.engine.model})...")
 
         first_ollama_diag = {}
-        response = self.engine.get_response(
-            context,
-            images=images,
-            user_summary=user_summary,
-            assistant_summary=assistant_summary,
-            assistant_name=assistant_name,
-            files_context=files_context,
-            compressed_context=compressed_context,
-            chunk_callback=chunk_callback,
-            status_callback=status_callback,
-            on_start_callback=on_start_callback,
-            ollama_diagnostics=first_ollama_diag
-        )
+        try:
+            response = self.engine.get_response(
+                context,
+                images=images,
+                user_summary=user_summary,
+                assistant_summary=assistant_summary,
+                assistant_name=assistant_name,
+                files_context=files_context,
+                compressed_context=compressed_context,
+                chunk_callback=chunk_callback,
+                status_callback=status_callback,
+                on_start_callback=on_start_callback,
+                ollama_diagnostics=first_ollama_diag
+            )
+        except Exception as e:
+            self.engine.system_prompt = original_system_prompt
+            import httpx
+            if isinstance(e, httpx.TimeoutException) or "timeout" in str(e).lower():
+                user_name = self.memory.user_profile.get("prénom", "Louis")
+                response_content = (
+                    f"Désolé {user_name}, l'appel au modèle Ollama a expiré (timeout).\n\n"
+                    "**Causes possibles du ralentissement :**\n"
+                    "- Une autre application de chatbot ou outil utilise actuellement Ollama en arrière-plan.\n"
+                    "- Le modèle requis est lourd ou Ollama procède à un échange de modèle dans le GPU (VRAM swapping).\n"
+                    "- Votre GPU/CPU est saturé par d'autres processus.\n\n"
+                    "*Conseil : Fermez les autres applications utilisant l'IA ou augmentez la valeur de 'ollama_request_timeout' dans settings.json.*"
+                )
+                return {
+                    "type": "text",
+                    "content": response_content,
+                    "system_notification": intent_result.get("message") if intent_result.get("action") == "load_context" else None
+                }
+            raise e
         
         if status_callback:
             status_callback("Finalisation...")
@@ -705,7 +725,20 @@ Règles strictes :
         if not response:
             self.engine.system_prompt = original_system_prompt
             user_name = self.memory.user_profile.get("prénom", "Louis")
-            response = f"Salut {user_name}, je suis là. (Ollama n'a pas renvoyé de texte)"
+            
+            exception_str = first_ollama_diag.get("exception", "") if first_ollama_diag else ""
+            if "timeout" in exception_str.lower() or "timeouterror" in exception_str.lower():
+                response = (
+                    f"Désolé {user_name}, l'appel au modèle Ollama a expiré (timeout).\n\n"
+                    "**Causes possibles du ralentissement :**\n"
+                    "- Une autre application de chatbot ou outil utilise actuellement Ollama en arrière-plan.\n"
+                    "- Le modèle requis est lourd ou Ollama procède à un échange de modèle dans le GPU (VRAM swapping).\n"
+                    "- Votre GPU/CPU est saturé par d'autres processus.\n\n"
+                    "*Conseil : Fermez les autres applications utilisant l'IA ou augmentez la valeur de 'ollama_request_timeout' dans settings.json.*"
+                )
+            else:
+                response = f"Salut {user_name}, je suis là, mais Ollama n'a pas pu renvoyer de réponse (Erreur : {exception_str or 'vide'})."
+                
             return {
                 "type": "text",
                 "content": response,

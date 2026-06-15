@@ -24,9 +24,16 @@ class AIEngine:
         self.system_prompt = SYSTEM_PROMPT
 
     def _get_client(self):
-        """Retourne une instance du client Ollama configurée avec le timeout."""
+        """Retourne une instance du client Ollama configurée avec le timeout (configurable)."""
         from config import OLLAMA_REQUEST_TIMEOUT_SECONDS
-        return ollama.Client(timeout=OLLAMA_REQUEST_TIMEOUT_SECONDS)
+        active_timeout = OLLAMA_REQUEST_TIMEOUT_SECONDS
+        try:
+            from settings_manager import SettingsManager
+            settings = SettingsManager()
+            active_timeout = settings.get_setting("ollama_request_timeout", OLLAMA_REQUEST_TIMEOUT_SECONDS)
+        except Exception:
+            pass
+        return ollama.Client(timeout=active_timeout)
 
     def does_model_support_vision(self, model_name=None):
         """
@@ -554,11 +561,28 @@ class AIEngine:
             
         except Exception as e:
             _safe_print(f"\n[DEBUG: Erreur critique Ollama -> {e}]")
-            log_diagnostic(f"[DIAGNOSTIC ENGINE ERROR] Erreur lors de l'appel Ollama : {e}")
+            
+            import httpx
+            is_timeout = isinstance(e, httpx.TimeoutException) or "timeout" in str(e).lower()
+            if is_timeout:
+                timeout_msg = (
+                    "[DIAGNOSTIC ENGINE WARNING] La requête d'inférence vers Ollama a expiré (timeout).\n"
+                    "Causes possibles :\n"
+                    "  - Une autre application ou un autre agent de discussion utilise Ollama activement.\n"
+                    "  - Un changement de modèle lourd est en cours dans le GPU (VRAM swapping).\n"
+                    "  - La puissance de calcul de votre GPU/CPU est saturée.\n"
+                    "Vous pouvez configurer 'ollama_request_timeout' dans settings.json pour augmenter ce délai."
+                )
+                log_diagnostic(timeout_msg)
+                _safe_print(f"\n{timeout_msg}\n")
+            else:
+                log_diagnostic(f"[DIAGNOSTIC ENGINE ERROR] Erreur lors de l'appel Ollama : {e}")
+
             if isinstance(ollama_diagnostics, dict):
-                ollama_diagnostics["exception"] = f"Critical error: {type(e).__name__}: {e}"
+                err_type = "TimeoutError" if is_timeout else type(e).__name__
+                ollama_diagnostics["exception"] = f"Critical error: {err_type}: {e}"
+
             try:
-                import httpx
                 if isinstance(e, httpx.TimeoutException):
                     raise e
             except ImportError:

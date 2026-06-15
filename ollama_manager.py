@@ -5,6 +5,7 @@ import shutil
 import urllib.request
 import time
 import atexit
+import socket
 
 OLLAMA_URL = "http://127.0.0.1:11434"
 _ollama_process = None
@@ -18,14 +19,44 @@ def _log(msg):
     except Exception:
         pass
 
-def is_ollama_running():
-    """Vérifie si le service Ollama écoute sur le port 11434."""
+def is_port_occupied(port=11434):
+    """Vérifie par socket TCP si un service écoute sur le port spécifié."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        try:
+            s.connect(("127.0.0.1", port))
+            return True
+        except Exception:
+            return False
+
+def check_ollama_api(timeout=1.0):
+    """
+    Vérifie si l'API d'Ollama répond sur l'endpoint léger /api/tags.
+    Retourne un tuple (responds_ok, status_msg).
+    """
+    url = f"{OLLAMA_URL}/api/tags"
     try:
-        req = urllib.request.Request(OLLAMA_URL, method="GET")
-        with urllib.request.urlopen(req, timeout=1.0) as response:
-            return response.status in (200, 204)
-    except Exception:
-        return False
+        req = urllib.request.Request(url, method="GET")
+        t0 = time.time()
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            duration = time.time() - t0
+            if response.status == 200:
+                if duration > 0.8 * timeout:
+                    return True, f"Ollama répond mais lentement ({duration:.2f}s)"
+                return True, "Ollama déjà actif"
+            else:
+                return False, f"Code HTTP inattendu : {response.status}"
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, socket.timeout):
+            return False, "Ollama ne répond pas (timeout de l'API)"
+        return False, f"Ollama indisponible ({e.reason})"
+    except Exception as e:
+        return False, f"Erreur de connexion Ollama : {e}"
+
+def is_ollama_running():
+    """Vérifie si le service Ollama écoute sur le port 11434 et répond à l'API."""
+    running, _ = check_ollama_api(timeout=1.0)
+    return running
 
 def find_ollama_executable():
     """Recherche l'exécutable Ollama dans le PATH ou dans les dossiers d'installation courants."""
@@ -69,16 +100,26 @@ def find_ollama_executable():
 
 def start_ollama_if_needed(timeout_seconds=15):
     """
-    Démarre le serveur Ollama si celui-ci n'est pas déjà actif.
+    Démarre le serveur Ollama si aucun service n'est déjà actif sur le port 11434.
     Retourne le processus Popen si démarré par nous, sinon None.
     """
-    if is_ollama_running():
-        _log("[OLLAMA] Le service Ollama est déjà actif.")
+    port_busy = is_port_occupied()
+    
+    if port_busy:
+        # Le port est occupé, on ne tente pas de double bind. On vérifie l'API.
+        api_ok, api_msg = check_ollama_api(timeout=1.5)
+        if api_ok:
+            if "lentement" in api_msg:
+                _log(f"[OLLAMA] Ollama répond mais lentement.")
+            else:
+                _log("[OLLAMA] Ollama déjà actif.")
+        else:
+            _log(f"[OLLAMA] Avertissement: Le port 11434 est occupé, mais l'API ne répond pas ou répond lentement : {api_msg}. Utilisation de l'instance existante.")
         return None
 
     exe_path = find_ollama_executable()
     if not exe_path:
-        _log("[OLLAMA] Impossible de trouver l'exécutable Ollama sur votre système. Veuillez l'installer ou le lancer manuellement.")
+        _log("[OLLAMA] Ollama indisponible (impossible de trouver l'exécutable Ollama sur votre système. Veuillez l'installer ou le lancer manuellement).")
         return None
 
     _log(f"[OLLAMA] Tentative de démarrage automatique d'Ollama via : {exe_path}")
@@ -97,11 +138,13 @@ def start_ollama_if_needed(timeout_seconds=15):
         _log(f"[OLLAMA] Échec lors du lancement du processus Ollama : {e}")
         return None
 
-    # Attente active que le serveur réponde
+    # Attente active non bloquante pour l'utilisateur
     start_time = time.time()
+    _log("[OLLAMA] Attente de la disponibilité de l'API Ollama...")
     while time.time() - start_time < timeout_seconds:
-        if is_ollama_running():
-            _log(f"[OLLAMA] Le serveur Ollama a été démarré avec succès en {time.time() - start_time:.1f} secondes.")
+        api_ok, api_msg = check_ollama_api(timeout=1.0)
+        if api_ok:
+            _log(f"[OLLAMA] Ollama lancé par Anna en {time.time() - start_time:.1f} secondes.")
             return proc
         
         # Vérification si le processus s'est arrêté brutalement
@@ -112,7 +155,6 @@ def start_ollama_if_needed(timeout_seconds=15):
         time.sleep(0.5)
 
     _log(f"[OLLAMA] Temps d'attente de {timeout_seconds} secondes dépassé. Le démarrage automatique a échoué.")
-    _log("[OLLAMA] Vous pouvez essayer de lancer Ollama manuellement.")
     # On arrête proprement le processus qu'on avait lancé puisqu'il ne répond pas
     stop_ollama(proc)
     return None
