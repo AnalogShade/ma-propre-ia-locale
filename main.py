@@ -109,11 +109,20 @@ def run_console(ctrl, checker_results=None):
                             if choix == 'o':
                                 success, msg = ctrl.editor.create_file(block['file_path'], block['content'], working_dir=ctrl.files.working_dir)
                                 print(f"\n[SYSTÈME] {msg}")
+                                change_id = block.get("id")
                                 if success:
+                                    if change_id:
+                                        ctrl.editor.update_change_state(ctrl.files.working_dir, change_id, "APPLIED")
                                     # Recharger le fichier pour qu'il soit dans le contexte IA
                                     ctrl.files.load_file(block['file_path'])
+                                else:
+                                    if change_id:
+                                        ctrl.editor.update_change_state(ctrl.files.working_dir, change_id, "FAILED", error_message=msg)
                             else:
                                 print("\n[SYSTÈME] Création annulée.")
+                                change_id = block.get("id")
+                                if change_id:
+                                    ctrl.editor.update_change_state(ctrl.files.working_dir, change_id, "CANCELLED")
                                 
                         # Traitement des modifications
                         for block in edit_blocks:
@@ -142,11 +151,20 @@ def run_console(ctrl, checker_results=None):
                                     
                                 success, msg = ctrl.editor.apply_edit(abs_path, block['search_content'], block['replace_content'])
                                 print(f"\n[SYSTÈME] {msg}")
+                                change_id = block.get("id")
                                 if success:
+                                    if change_id:
+                                        ctrl.editor.update_change_state(ctrl.files.working_dir, change_id, "APPLIED")
                                     # Recharger le fichier mis à jour pour le contexte
                                     ctrl.files.load_file(block['file_path'])
+                                else:
+                                    if change_id:
+                                        ctrl.editor.update_change_state(ctrl.files.working_dir, change_id, "FAILED", error_message=msg)
                             else:
                                 print("\n[SYSTÈME] Modification annulée.")
+                                change_id = block.get("id")
+                                if change_id:
+                                    ctrl.editor.update_change_state(ctrl.files.working_dir, change_id, "CANCELLED")
                                 
                     # Traitement des propositions de commandes
                     if command_blocks:

@@ -68,7 +68,9 @@ class CodeEditor:
             # Détection de la fin du bloc de création
             if stripped.startswith(">>>>>>> CREATE"):
                 if in_block and current_file:
+                    block_id = f"ch_create_{len(blocks)}"
                     blocks.append({
+                        "id": block_id,
                         "file_path": current_file,
                         "content": "\n".join(block_content)
                     })
@@ -276,7 +278,9 @@ class CodeEditor:
                                 "search_content": search_str[:200] + "..." if len(search_str) > 200 else search_str
                             })
                         
+                    block_id = f"ch_edit_{len(blocks)}"
                     blocks.append({
+                        "id": block_id,
                         "file_path": current_file,
                         "search_content": search_str,
                         "replace_content": replace_str,
@@ -377,7 +381,7 @@ class CodeEditor:
                 )
                 
             # Lire le contenu actuel
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, 'r', encoding='utf-8', newline='') as f:
                 original_content = f.read()
                 
             # Détection et normalisation des fins de ligne du fichier
@@ -385,30 +389,43 @@ class CodeEditor:
             if "\r\n" in original_content:
                 newline_char = "\r\n"
                 
-            search_normalized_ends = search_text.replace("\r\n", "\n").replace("\n", newline_char)
-            replace_normalized_ends = replace_text.replace("\r\n", "\n").replace("\n", newline_char)
+            original_lines = original_content.splitlines()
+            search_lines = search_text.splitlines()
+            replace_lines = replace_text.splitlines()
             
+            # --- CASCADE DE RECHERCHE ---
             new_content = None
+            applied_level = None
             
-            # 1. Correspondance exacte unique
-            exact_count = original_content.count(search_normalized_ends)
+            # NIVEAU 1 : Match Exact
+            exact_count = original_content.count(search_text)
             if exact_count == 1:
-                new_content = original_content.replace(search_normalized_ends, replace_normalized_ends, 1)
+                new_content = original_content.replace(search_text, replace_text, 1)
+                applied_level = 1
             elif exact_count > 1:
                 return False, "Le bloc de code à remplacer (SEARCH) est ambigu car il a été trouvé plusieurs fois exactement dans le fichier. Modification annulée."
-            else:
-                # 2. Tolérance aux espaces / indentation / lignes vides (contiguë)
+            
+            # NIVEAU 2 : Normalisation des Fins de Ligne
+            if new_content is None:
+                search_normalized_ends = search_text.replace("\r\n", "\n").replace("\n", newline_char)
+                replace_normalized_ends = replace_text.replace("\r\n", "\n").replace("\n", newline_char)
+                
+                exact_count_l2 = original_content.count(search_normalized_ends)
+                if exact_count_l2 == 1:
+                    new_content = original_content.replace(search_normalized_ends, replace_normalized_ends, 1)
+                    applied_level = 2
+                elif exact_count_l2 > 1:
+                    return False, "Le bloc de code à remplacer (SEARCH) est ambigu car il a été trouvé plusieurs fois après normalisation des fins de ligne. Modification annulée."
+            
+            # NIVEAU 3 : Match Contigu sans espaces ni indentation
+            if new_content is None:
                 import difflib
                 
-                def normalize(line):
+                def normalize_l3(line):
                     return "".join(line.split())
                     
-                original_lines = original_content.splitlines()
-                search_lines = search_text.splitlines()
-                replace_lines = replace_text.splitlines()
-                
-                non_empty_orig = [(idx, normalize(line)) for idx, line in enumerate(original_lines) if line.strip()]
-                non_empty_search = [(idx, normalize(line)) for idx, line in enumerate(search_lines) if line.strip()]
+                non_empty_orig = [(idx, normalize_l3(line)) for idx, line in enumerate(original_lines) if line.strip()]
+                non_empty_search = [(idx, normalize_l3(line)) for idx, line in enumerate(search_lines) if line.strip()]
                 
                 if not non_empty_search:
                     return False, "Le bloc de code à remplacer (SEARCH) est vide. Modification annulée."
@@ -431,59 +448,101 @@ class CodeEditor:
                     last_orig_idx = non_empty_orig[matched_starts[0] + search_len - 1][0]
                     new_content_lines = original_lines[:first_orig_idx] + replace_lines + original_lines[last_orig_idx + 1:]
                     new_content = newline_char.join(new_content_lines)
+                    applied_level = 3
                 elif len(matched_starts) > 1:
                     return False, "Le bloc de code à remplacer (SEARCH) est ambigu car il correspond à plusieurs emplacements différents dans le fichier. Modification annulée."
-                else:
-                    # 3. Détection de bloc non-contigu (omissions de lignes)
-                    norm_orig_only = [val for _, val in non_empty_orig]
-                    norm_search_only = [val for _, val in non_empty_search]
-                    
-                    matcher = difflib.SequenceMatcher(None, norm_search_only, norm_orig_only)
-                    matching_blocks = matcher.get_matching_blocks()
-                    
-                    total_matched_lines = sum(size for _, _, size in matching_blocks)
-                    
-                    if total_matched_lines == len(norm_search_only):
-                        # On a trouvé toutes les lignes du bloc SEARCH dans le fichier, mais pas de façon contiguë.
-                        # Vérifions si les lignes ignorées/sautées dans le fichier original sont UNIQUEMENT des commentaires ou du vide.
-                        start_orig_idx = matching_blocks[0].b
-                        end_orig_idx = matching_blocks[-2].b + matching_blocks[-2].size - 1
+            
+            # NIVEAU 4 : Normalisation Unicode et Typographique
+            if new_content is None:
+                import unicodedata
+                
+                def normalize_l4(line):
+                    if not line:
+                        return ""
+                    # Unicode NFC
+                    line = unicodedata.normalize('NFC', line)
+                    # Apostrophes
+                    line = line.replace('’', "'").replace('`', "'").replace('‘', "'")
+                    # Espaces insécables
+                    line = line.replace('\xa0', ' ').replace('\u2007', ' ').replace('\u202F', ' ')
+                    # Suppression des espaces blancs pour la comparaison
+                    return "".join(line.split())
+                
+                non_empty_orig_l4 = [(idx, normalize_l4(line)) for idx, line in enumerate(original_lines) if line.strip()]
+                non_empty_search_l4 = [(idx, normalize_l4(line)) for idx, line in enumerate(search_lines) if line.strip()]
+                
+                search_len_l4 = len(non_empty_search_l4)
+                orig_len_l4 = len(non_empty_orig_l4)
+                matched_starts_l4 = []
+                
+                for start_idx in range(orig_len_l4 - search_len_l4 + 1):
+                    match = True
+                    for offset in range(search_len_l4):
+                        if non_empty_orig_l4[start_idx + offset][1] != non_empty_search_l4[offset][1]:
+                            match = False
+                            break
+                    if match:
+                        matched_starts_l4.append(start_idx)
                         
-                        matched_orig_indices = set()
-                        for match in matching_blocks[:-1]:
-                            for offset in range(match.size):
-                                matched_orig_indices.add(match.b + offset)
-                                
-                        skipped_orig_indices = [idx for idx in range(start_orig_idx, end_orig_idx + 1) if idx not in matched_orig_indices]
-                        
-                        def is_comment_or_whitespace(line):
-                            s = line.strip()
-                            if not s:
-                                return True
-                            if s.startswith('#') or s.startswith('//'):
-                                return True
-                            if s.startswith('/*') or s.endswith('*/') or s.startswith('*'):
-                                return True
-                            if s.startswith('<!--') or s.endswith('-->') or s.startswith('<!'):
-                                return True
-                            return False
+                if len(matched_starts_l4) == 1:
+                    first_orig_idx = non_empty_orig_l4[matched_starts_l4[0]][0]
+                    last_orig_idx = non_empty_orig_l4[matched_starts_l4[0] + search_len_l4 - 1][0]
+                    new_content_lines = original_lines[:first_orig_idx] + replace_lines + original_lines[last_orig_idx + 1:]
+                    new_content = newline_char.join(new_content_lines)
+                    applied_level = 4
+                elif len(matched_starts_l4) > 1:
+                    return False, "Le bloc de code à remplacer (SEARCH) est ambigu après normalisation typographique. Modification annulée."
+            
+            # NIVEAU 5 (Historique) : Détection de bloc non-contigu (omissions de lignes)
+            if new_content is None:
+                norm_orig_only = [val for _, val in non_empty_orig]
+                norm_search_only = [val for _, val in non_empty_search]
+                
+                matcher = difflib.SequenceMatcher(None, norm_search_only, norm_orig_only)
+                matching_blocks = matcher.get_matching_blocks()
+                
+                total_matched_lines = sum(size for _, _, size in matching_blocks)
+                
+                if total_matched_lines == len(norm_search_only):
+                    # On a trouvé toutes les lignes du bloc SEARCH dans le fichier, mais pas de façon contiguë.
+                    start_orig_idx = matching_blocks[0].b
+                    end_orig_idx = matching_blocks[-2].b + matching_blocks[-2].size - 1
+                    
+                    matched_orig_indices = set()
+                    for match in matching_blocks[:-1]:
+                        for offset in range(match.size):
+                            matched_orig_indices.add(match.b + offset)
                             
-                        skipped_lines = [original_lines[non_empty_orig[idx][0]] for idx in skipped_orig_indices]
-                        if all(is_comment_or_whitespace(line) for line in skipped_lines):
-                            # Toutes les lignes sautées ne sont que des commentaires ou du vide. C'est sûr à appliquer.
-                            first_orig_idx = non_empty_orig[start_orig_idx][0]
-                            last_orig_idx = non_empty_orig[end_orig_idx][0]
-                            new_content_lines = original_lines[:first_orig_idx] + replace_lines + original_lines[last_orig_idx + 1:]
-                            new_content = newline_char.join(new_content_lines)
-                        else:
-                            return False, (
-                                "Le bloc de code à remplacer (SEARCH) semble contenir des omissions ou des lignes sautées.\n"
-                                "Anna a probablement omis des sections de code inchangées pour économiser de la place.\n"
-                                "Par mesure de sécurité pour éviter de corrompre votre fichier, la modification est refusée.\n"
-                                "Conseil : Veuillez demander à Anna de découper ses modifications en blocs SEARCH/REPLACE plus petits et contigus."
-                            )
+                    skipped_orig_indices = [idx for idx in range(start_orig_idx, end_orig_idx + 1) if idx not in matched_orig_indices]
+                    
+                    def is_comment_or_whitespace(line):
+                        s = line.strip()
+                        if not s:
+                            return True
+                        if s.startswith('#') or s.startswith('//'):
+                            return True
+                        if s.startswith('/*') or s.endswith('*/') or s.startswith('*'):
+                            return True
+                        if s.startswith('<!--') or s.endswith('-->') or s.startswith('<!'):
+                            return True
+                        return False
+                        
+                    skipped_lines = [original_lines[non_empty_orig[idx][0]] for idx in skipped_orig_indices]
+                    if all(is_comment_or_whitespace(line) for line in skipped_lines):
+                        first_orig_idx = non_empty_orig[start_orig_idx][0]
+                        last_orig_idx = non_empty_orig[end_orig_idx][0]
+                        new_content_lines = original_lines[:first_orig_idx] + replace_lines + original_lines[last_orig_idx + 1:]
+                        new_content = newline_char.join(new_content_lines)
+                        applied_level = 5
                     else:
-                        return False, "Le bloc de code à remplacer (SEARCH) n'a pas été trouvé dans le fichier. Modification annulée."
+                        return False, (
+                            "Le bloc de code à remplacer (SEARCH) semble contenir des omissions ou des lignes sautées.\n"
+                            "Anna a probablement omis des sections de code inchangées pour économiser de la place.\n"
+                            "Par mesure de sécurité pour éviter de corrompre votre fichier, la modification est refusée.\n"
+                            "Conseil : Veuillez demander à Anna de découper ses modifications en blocs SEARCH/REPLACE plus petits et contigus."
+                        )
+                else:
+                    return False, "Le bloc de code à remplacer (SEARCH) n'a pas été trouvé dans le fichier. Modification annulée."
             
             # Créer la sauvegarde de sécurité
             if not self._create_backup(path):
@@ -491,7 +550,7 @@ class CodeEditor:
                 
             try:
                 # Écrire sur le disque
-                with open(path, 'w', encoding='utf-8') as f:
+                with open(path, 'w', encoding='utf-8', newline='') as f:
                     f.write(new_content)
                     
                 # Supprimer la sauvegarde temporaire devenue inutile
@@ -545,3 +604,108 @@ class CodeEditor:
             
         except Exception as e:
             return False, f"Erreur lors de la création du fichier : {e}"
+
+    def start_session(self, working_dir, create_blocks, edit_blocks):
+        """
+        Démarre une nouvelle session d'édition et l'enregistre dans .anna/changes_session.json.
+        """
+        if not working_dir:
+            return
+            
+        import json
+        import time
+        from pathlib import Path
+        
+        anna_dir = Path(working_dir) / ".anna"
+        try:
+            anna_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            print(f"  [DEBUG EDITOR] Impossible de créer le répertoire .anna : {e}")
+            return
+            
+        session_file = anna_dir / "changes_session.json"
+        
+        # Obtenir un identifiant de session unique basé sur le temps
+        session_id = f"session_{int(time.time())}"
+        
+        # Construire les métadonnées pour chaque bloc
+        files_data = {}
+        
+        for block in create_blocks:
+            file_path = block.get("file_path", "inconnu")
+            if file_path not in files_data:
+                files_data[file_path] = {"changes": []}
+                
+            files_data[file_path]["changes"].append({
+                "change_id": block.get("id"),
+                "type": "create",
+                "state": "PROPOSED",
+                "content": block.get("content", ""),
+                "error_message": None
+            })
+            
+        for block in edit_blocks:
+            file_path = block.get("file_path", "inconnu")
+            if file_path not in files_data:
+                files_data[file_path] = {"changes": []}
+                
+            files_data[file_path]["changes"].append({
+                "change_id": block.get("id"),
+                "type": "edit",
+                "state": "FAILED" if block.get("invalid") else "PROPOSED",
+                "search_content": block.get("search_content", ""),
+                "replace_content": block.get("replace_content", ""),
+                "error_message": block.get("error_message") if block.get("invalid") else None
+            })
+            
+        session_data = {
+            "session_id": session_id,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "files": files_data
+        }
+        
+        try:
+            with open(session_file, 'w', encoding='utf-8', newline='') as f:
+                json.dump(session_data, f, ensure_ascii=False, indent=2)
+            print(f"  [SESSION] Session {session_id} créée dans {session_file}")
+        except Exception as e:
+            print(f"  [DEBUG EDITOR] Erreur lors de l'écriture du fichier de session : {e}")
+
+    def update_change_state(self, working_dir, change_id, state, error_message=None):
+        """
+        Met à jour l'état d'un changement unitaire dans le fichier de session.
+        """
+        if not working_dir:
+            return False
+            
+        import json
+        from pathlib import Path
+        
+        session_file = Path(working_dir) / ".anna" / "changes_session.json"
+        if not session_file.exists():
+            return False
+            
+        try:
+            with open(session_file, 'r', encoding='utf-8', newline='') as f:
+                session_data = json.load(f)
+                
+            modified = False
+            for file_path, file_info in session_data.get("files", {}).items():
+                for change in file_info.get("changes", []):
+                    if change.get("change_id") == change_id:
+                        change["state"] = state
+                        if error_message is not None:
+                            change["error_message"] = error_message
+                        modified = True
+                        break
+                if modified:
+                    break
+                    
+            if modified:
+                with open(session_file, 'w', encoding='utf-8', newline='') as f:
+                    json.dump(session_data, f, ensure_ascii=False, indent=2)
+                return True
+            return False
+        except Exception as e:
+            print(f"  [DEBUG EDITOR] Erreur lors de la mise à jour de la session : {e}")
+            return False

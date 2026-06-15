@@ -1291,14 +1291,15 @@ Note : Shift + Entrée pour un saut de ligne."""
                         # Conserver le comportement d'origine pour un seul bloc
                         b_type, block = all_blocks[0]
                         if b_type == "create":
-                            self.show_diff_block(block['file_path'], "create", create_content=block['content'])
+                            self.show_diff_block(block['file_path'], "create", create_content=block['content'], change_id=block.get('id'))
                         elif b_type == "edit":
                             self.show_diff_block(
                                 block['file_path'], "edit", 
                                 search_content=block['search_content'], 
                                 replace_content=block['replace_content'],
                                 invalid=block.get('invalid', False),
-                                error_message=block.get('error_message', "")
+                                error_message=block.get('error_message', ""),
+                                change_id=block.get('id')
                             )
                         elif b_type == "command":
                             self.show_command_block(
@@ -1313,15 +1314,23 @@ Note : Shift + Entrée pour un saut de ligne."""
                         pending_list = []
                         btn_apply_all = None
                         btn_cancel_all = None
+                        is_applying_all = False
                         
-                        # Désactiver automatiquement les boutons globaux s'il n'y a plus aucun bloc pending
+                        # Désactiver automatiquement les boutons globaux s'il n'y a plus aucun bloc pending ou failed
                         def update_global_buttons():
-                            has_pending = any(b["state"]["status"] == "pending" for b in pending_list)
-                            if not has_pending:
+                            if is_applying_all:
                                 if btn_apply_all and btn_apply_all.winfo_exists():
                                     btn_apply_all.config(state="disabled")
                                 if btn_cancel_all and btn_cancel_all.winfo_exists():
                                     btn_cancel_all.config(state="disabled")
+                                return
+                                
+                            has_pending_or_failed = any(b["state"]["status"] in ("pending", "failed") for b in pending_list)
+                            state = "normal" if has_pending_or_failed else "disabled"
+                            if btn_apply_all and btn_apply_all.winfo_exists():
+                                btn_apply_all.config(state=state)
+                            if btn_cancel_all and btn_cancel_all.winfo_exists():
+                                btn_cancel_all.config(state=state)
                                     
                         for idx, (b_type, block) in enumerate(all_blocks):
                             # Séparateur entre les blocs
@@ -1335,7 +1344,8 @@ Note : Shift + Entrée pour un saut de ligne."""
                                     create_content=block['content'],
                                     parent_frame=container_frame,
                                     pending_list=pending_list,
-                                    on_state_change=update_global_buttons
+                                    on_state_change=update_global_buttons,
+                                    change_id=block.get('id')
                                 )
                             elif b_type == "edit":
                                 self.show_diff_block(
@@ -1346,7 +1356,8 @@ Note : Shift + Entrée pour un saut de ligne."""
                                     error_message=block.get('error_message', ""),
                                     parent_frame=container_frame,
                                     pending_list=pending_list,
-                                    on_state_change=update_global_buttons
+                                    on_state_change=update_global_buttons,
+                                    change_id=block.get('id')
                                 )
                             elif b_type == "command":
                                 self.show_command_block(
@@ -1366,23 +1377,38 @@ Note : Shift + Entrée pour un saut de ligne."""
                         global_btn_frame.pack(fill="x", pady=(5, 0))
                         
                         def apply_all():
-                            if btn_apply_all and btn_apply_all.winfo_exists():
-                                btn_apply_all.config(state="disabled")
-                            if btn_cancel_all and btn_cancel_all.winfo_exists():
-                                btn_cancel_all.config(state="disabled")
+                            nonlocal is_applying_all
+                            if is_applying_all:
+                                return
+                            is_applying_all = True
+                            update_global_buttons()
                             
-                            for b in pending_list:
-                                if b["state"]["status"] == "pending":
-                                    if not b["invalid"]:
-                                        try:
-                                            b["apply"]()
-                                        except Exception as ex:
-                                            print(f"[GUI ERROR] Échec de l'application globale d'un bloc : {ex}")
-                                    else:
-                                        try:
-                                            b["cancel"]()
-                                        except Exception as ex:
-                                            print(f"[GUI ERROR] Échec de l'invalidation globale d'un bloc : {ex}")
+                            import threading
+                            def run_apply_all_thread():
+                                nonlocal is_applying_all
+                                try:
+                                    for b in pending_list:
+                                        if b["state"]["status"] in ("pending", "failed"):
+                                            if not b["invalid"]:
+                                                is_retry = (b["state"]["status"] == "failed")
+                                                try:
+                                                    b["apply_sync"](is_retry=is_retry)
+                                                except Exception as ex:
+                                                    print(f"[GUI ERROR] Échec lors de apply_sync : {ex}")
+                                                import time
+                                                time.sleep(0.15)
+                                            else:
+                                                container_frame.after(0, b["cancel"])
+                                                import time
+                                                time.sleep(0.05)
+                                finally:
+                                    def finish_apply_all():
+                                        nonlocal is_applying_all
+                                        is_applying_all = False
+                                        update_global_buttons()
+                                    container_frame.after(0, finish_apply_all)
+                                    
+                            threading.Thread(target=run_apply_all_thread, daemon=True).start()
                                             
                         def cancel_all():
                             if btn_apply_all and btn_apply_all.winfo_exists():
@@ -1391,7 +1417,7 @@ Note : Shift + Entrée pour un saut de ligne."""
                                 btn_cancel_all.config(state="disabled")
                                 
                             for b in pending_list:
-                                if b["state"]["status"] == "pending":
+                                if b["state"]["status"] in ("pending", "failed"):
                                     try:
                                         b["cancel"]()
                                     except Exception as ex:
@@ -1489,10 +1515,11 @@ Note : Shift + Entrée pour un saut de ligne."""
             self.engine.model = matched_model
             self.router.model = matched_model
         else:
-            fallback_model = models[0]
-            self.model_var.set(fallback_model)
-            self.on_model_selected(fallback_model)
-            self.append_chat("Système", f"Modèle '{current_active}' non trouvé localement. Repli sur : {fallback_model}")
+            if models:
+                fallback_model = models[0]
+                self.model_var.set(fallback_model)
+                self.on_model_selected(fallback_model)
+                self.append_chat("Système", f"Modèle '{current_active}' non trouvé localement. Repli sur : {fallback_model}")
 
     def on_model_selected(self, model_name):
         """Callback appelé lors de la sélection d'un modèle."""
@@ -1502,7 +1529,7 @@ Note : Shift + Entrée pour un saut de ligne."""
         self.settings.set_setting("selected_model", model_name)
         print(f"[SETTINGS] Modèle configuré à chaud : {model_name}")
 
-    def show_diff_block(self, file_path, block_type, search_content="", replace_content="", create_content="", invalid=False, error_message="", parent_frame=None, pending_list=None, on_state_change=None):
+    def show_diff_block(self, file_path, block_type, search_content="", replace_content="", create_content="", invalid=False, error_message="", parent_frame=None, pending_list=None, on_state_change=None, change_id=None):
         """
         Crée un cadre Tkinter contenant le diff visuel et les boutons interactifs,
         et l'insère directement dans la zone de chat ou dans un parent_frame.
@@ -1510,43 +1537,60 @@ Note : Shift + Entrée pour un saut de ligne."""
         # Activer le chat pour insertion
         if not parent_frame:
             self.chat_area.config(state='normal')
-        
-        # Création du cadre principal du Diff
-        if parent_frame:
-            diff_frame = tk.Frame(parent_frame, bg="#1e1e1e", bd=0, padx=5, pady=5)
+            
+        # Création du cadre du diff
+        diff_frame = tk.Frame(parent_frame if parent_frame else self.chat_area, bg="#1e1e1e", highlightbackground="#333333", highlightthickness=1, bd=0, padx=15, pady=15)
+        if not parent_frame:
+            diff_frame.pack(fill="x", pady=10)
         else:
-            diff_frame = tk.Frame(self.chat_area, bg="#1e1e1e", highlightbackground="#333333", highlightthickness=1, bd=0, padx=10, pady=10)
+            diff_frame.pack(fill="x")
+            
+        # Titre du bloc
+        title_label = tk.Label(diff_frame, text=f"📄 {file_path}", bg="#1e1e1e", fg="#03dac6", font=("Arial", 10, "bold"), anchor="w")
+        title_label.pack(fill="x", pady=(0, 10))
         
-        title_text = f"📂 CRÉATION DE FICHIER : {file_path}" if block_type == "create" else f"📂 MODIFICATION DE FICHIER : {file_path}"
-        title = tk.Label(diff_frame, text=title_text, bg="#1e1e1e", fg="#bb86fc", font=("Arial", 10, "bold"), anchor="w")
-        title.pack(fill="x", pady=(0, 5))
+        # Affichage du contenu
+        text_frame = tk.Frame(diff_frame, bg="#2a2a2a", bd=0)
+        text_frame.pack(fill="x", pady=(0, 10))
         
-        # Zone de texte de Diff
-        diff_text = tk.Text(diff_frame, wrap=tk.WORD, font=("Consolas", 10), bg="#2d2d2d", fg="#e0e0e0", bd=0, height=8, width=70)
-        diff_text.tag_config("minus", background="#4a1515", foreground="#ff8080")
-        diff_text.tag_config("plus", background="#154a15", foreground="#80ff80")
-        diff_text.tag_config("info", foreground="#888888")
+        # Ajout d'une barre de défilement verticale
+        text_scrollbar = tk.Scrollbar(text_frame)
+        text_scrollbar.pack(side="right", fill="y")
+        
+        # Zone de texte
+        text_area = tk.Text(text_frame, wrap="none", height=min(10, max(3, len(create_content.splitlines()) if block_type == "create" else len(search_content.splitlines()) + len(replace_content.splitlines()))), bg="#121212", fg="#e0e0e0", insertbackground="white", relief="flat", bd=0, font=("Courier New", 9), yscrollcommand=text_scrollbar.set)
+        text_area.pack(fill="x", side="left", expand=True)
+        text_scrollbar.config(command=text_area.yview)
         
         if block_type == "create":
-            for line in create_content.splitlines():
-                diff_text.insert(tk.END, f"+ {line}\n", "plus")
+            text_area.insert("end", create_content)
+            # Désactiver l'édition
+            text_area.config(state="disabled")
         else:
-            for line in search_content.splitlines():
-                diff_text.insert(tk.END, f"- {line}\n", "minus")
-            diff_text.insert(tk.END, "=========================================\n", "info")
-            for line in replace_content.splitlines():
-                diff_text.insert(tk.END, f"+ {line}\n", "plus")
-                
-        diff_text.config(state="disabled")
-        diff_text.pack(fill="both", expand=True, pady=5)
-        
-        # Cadre pour les boutons
+            # Insérer le diff
+            text_area.insert("end", "<<<<<<< SEARCH\n", "search_header")
+            text_area.insert("end", search_content + "\n", "search")
+            text_area.insert("end", "=======\n", "sep_header")
+            text_area.insert("end", replace_content + "\n", "replace")
+            text_area.insert("end", ">>>>>>> REPLACE", "replace_header")
+            
+            # Définition des couleurs des tags
+            text_area.tag_config("search_header", fg="#ff5555")
+            text_area.tag_config("search", fg="#ff7777")
+            text_area.tag_config("sep_header", fg="#03dac6")
+            text_area.tag_config("replace", fg="#80ff80")
+            text_area.tag_config("replace_header", fg="#03dac6")
+            
+            text_area.config(state="disabled")
+            
+        # Cadre des boutons
         btn_frame = tk.Frame(diff_frame, bg="#1e1e1e")
-        btn_frame.pack(fill="x", pady=(5, 0))
+        btn_frame.pack(fill="x")
         
-        # Variables de boutons explicites
         btn_apply = None
         btn_cancel = None
+        
+        # État local pour le suivi de ce bloc
         block_state = {"status": "invalid" if invalid else "pending"}
         
         # Label d'erreur dynamique (affiché initialement si invalide, mis à jour si échec d'application)
@@ -1563,17 +1607,23 @@ Note : Shift + Entrée pour un saut de ligne."""
             if status == "applied":
                 status_label.config(text="✓ Appliqué", fg="#80ff80")
                 if btn_apply and btn_apply.winfo_exists():
-                    btn_apply.config(state="disabled")
+                    btn_apply.config(text=f"✓ {action_title}", command=on_apply, state="disabled", bg="#03dac6", fg="black")
                 if btn_cancel and btn_cancel.winfo_exists():
                     btn_cancel.config(state="disabled")
             elif status == "cancelled":
                 status_label.config(text="✗ Annulé", fg="#888888")
                 if btn_apply and btn_apply.winfo_exists():
-                    btn_apply.config(state="disabled")
+                    btn_apply.config(text=f"✓ {action_title}", command=on_apply, state="disabled", bg="#03dac6", fg="black")
                 if btn_cancel and btn_cancel.winfo_exists():
                     btn_cancel.config(state="disabled")
             elif status == "failed":
                 status_label.config(text="⚠ Échoué", fg="#ff5555")
+                if btn_apply and btn_apply.winfo_exists():
+                    btn_apply.config(text="🔄 Réessayer", command=on_retry, state="normal", bg="#4a90e2", fg="white")
+                if btn_cancel and btn_cancel.winfo_exists():
+                    btn_cancel.config(state="normal")
+            elif status in ("apply_pending", "retry_pending"):
+                status_label.config(text="🔄 Analyse en cours...", fg="#4a90e2")
                 if btn_apply and btn_apply.winfo_exists():
                     btn_apply.config(state="disabled")
                 if btn_cancel and btn_cancel.winfo_exists():
@@ -1583,54 +1633,70 @@ Note : Shift + Entrée pour un saut de ligne."""
             else:
                 status_label.config(text="", fg="#e0e0e0")
         
-        # État et actions des boutons
+        # Actions de modification asynchrones (Phase 3)
+        def apply_block_sync(is_retry=False):
+            state_str = "retry_pending" if is_retry else "apply_pending"
+            block_state["status"] = state_str
+            diff_frame.after(0, update_ui_for_status)
+            
+            success = False
+            msg = ""
+            try:
+                if block_type == "create":
+                    success, msg = self.editor.create_file(file_path, create_content, working_dir=self.files.working_dir)
+                else:
+                    from pathlib import Path
+                    if not Path(file_path).is_absolute() and self.files.working_dir:
+                        abs_path = (Path(self.files.working_dir) / file_path).resolve()
+                    else:
+                        abs_path = Path(file_path).resolve()
+                    success, msg = self.editor.apply_edit(abs_path, search_content, replace_content)
+            except Exception as ex:
+                success = False
+                msg = f"Erreur interne: {str(ex)}"
+                
+            def finalize_ui():
+                prefix = "[Réessai] " if is_retry else ""
+                self.append_chat("Système", f"{prefix}{msg}")
+                if success:
+                    block_state["status"] = "applied"
+                    if change_id:
+                        self.editor.update_change_state(self.files.working_dir, change_id, "APPLIED")
+                    self.files.load_file(file_path)
+                else:
+                    block_state["status"] = "failed"
+                    if change_id:
+                        self.editor.update_change_state(self.files.working_dir, change_id, "FAILED", error_message=msg)
+                    error_status_label.config(text=f"⚠ {msg}")
+                    error_status_label.pack(fill="x", pady=(0, 5))
+                update_ui_for_status()
+                if on_state_change:
+                    on_state_change()
+                    
+            diff_frame.after(0, finalize_ui)
+            return success, msg
+            
+        def apply_block_async(is_retry=False):
+            import threading
+            threading.Thread(target=lambda: apply_block_sync(is_retry=is_retry), daemon=True).start()
+            return True
+            
         def on_apply():
             if block_state["status"] not in ("pending", "failed"):
                 return False
+            return apply_block_async(is_retry=False)
             
-            if btn_apply and btn_apply.winfo_exists():
-                btn_apply.config(state="disabled")
-            if btn_cancel and btn_cancel.winfo_exists():
-                btn_cancel.config(state="disabled")
-            
-            if block_type == "create":
-                success, msg = self.editor.create_file(file_path, create_content, working_dir=self.files.working_dir)
-                self.append_chat("Système", msg)
-                if success:
-                    block_state["status"] = "applied"
-                    self.files.load_file(file_path)
-                else:
-                    block_state["status"] = "failed"
-                    error_status_label.config(text=f"⚠ {msg}")
-                    error_status_label.pack(fill="x", pady=(0, 5))
-                print(f"  [EDITOR ACTION] Création du fichier '{file_path}' - Résultat : {'SUCCÈS' if success else 'ÉCHEC'} ({msg})")
-            else:
-                from pathlib import Path
-                if not Path(file_path).is_absolute() and self.files.working_dir:
-                    abs_path = (Path(self.files.working_dir) / file_path).resolve()
-                else:
-                    abs_path = Path(file_path).resolve()
-                    
-                success, msg = self.editor.apply_edit(abs_path, search_content, replace_content)
-                self.append_chat("Système", msg)
-                if success:
-                    block_state["status"] = "applied"
-                    self.files.load_file(file_path)
-                else:
-                    block_state["status"] = "failed"
-                    error_status_label.config(text=f"⚠ {msg}")
-                    error_status_label.pack(fill="x", pady=(0, 5))
-                print(f"  [EDITOR ACTION] Modification du fichier '{file_path}' - Résultat : {'SUCCÈS' if success else 'ÉCHEC'} ({msg})")
-            
-            update_ui_for_status()
-            if on_state_change:
-                on_state_change()
-            return success
+        def on_retry():
+            if block_state["status"] != "failed":
+                return False
+            return apply_block_async(is_retry=True)
             
         def on_cancel():
-            if block_state["status"] != "pending":
+            if block_state["status"] != "pending" and block_state["status"] != "failed":
                 return
             block_state["status"] = "cancelled"
+            if change_id:
+                self.editor.update_change_state(self.files.working_dir, change_id, "CANCELLED")
             
             if btn_apply and btn_apply.winfo_exists():
                 btn_apply.config(state="disabled")
@@ -1668,6 +1734,7 @@ Note : Shift + Entrée pour un saut de ligne."""
                 "state": block_state,
                 "apply": on_apply,
                 "cancel": on_cancel,
+                "apply_sync": apply_block_sync,
                 "invalid": invalid
             })
             

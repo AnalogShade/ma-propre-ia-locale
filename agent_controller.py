@@ -1039,6 +1039,11 @@ Règles strictes :
             print(f"[CONTROLLER WARNING] Échec de la détection d'émotion : {e}")
             
         self.engine.system_prompt = original_system_prompt
+        
+        # Phase 2 : Enregistrement de la session unitaire dans .anna/changes_session.json
+        if self.files.working_dir and (create_blocks or edit_blocks):
+            self.editor.start_session(self.files.working_dir, create_blocks, edit_blocks)
+            
         return {
             "type": "ai_response",
             "content": clean_response_with_plan,
