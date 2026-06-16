@@ -145,9 +145,9 @@ class AnnaGUI:
         self.avatar_label = tk.Label(self.left_frame, text="Avatar Anna\n(256x256)", bg="#1e1e1e", fg="#e0e0e0", font=("Arial", 12))
         self.avatar_label.place(relx=0.5, rely=0.5, anchor="center")
 
-        # Bouton TTS (Speaker)
-        self.tts_button = tk.Button(self.left_frame, text="🔊 Voix", command=self.show_voice_menu, bg="#333333", fg="white", activebackground="#444444", activeforeground="white", relief="flat")
-        self.tts_button.pack(side="bottom", pady=(0, 5), fill="x", padx=10)
+        # Bouton TTS (Speaker) - placé en dehors et sous le cadre de l'avatar
+        self.tts_button = tk.Button(self.left_panel, text="🔊 Voix", command=self.show_voice_menu, bg="#333333", fg="white", activebackground="#444444", activeforeground="white", relief="flat")
+        self.tts_button.pack(side="top", fill="x", pady=(10, 0))
 
         # Cadre pour le réglage de volume (placé sous l'avatar dans la zone vide)
         self.volume_frame = tk.Frame(self.left_panel, bg="#1e1e1e", highlightbackground="#333333", highlightthickness=1)
@@ -347,6 +347,12 @@ class AnnaGUI:
         self.trace_panel = tk.Frame(self.chat_and_trace_container, bg="#1e1e1e", width=280, highlightbackground="#333333", highlightthickness=1)
         self.trace_panel.pack_propagate(False)
         
+        # Poignée de redimensionnement pour le panneau de trace
+        self.trace_resize_handle = tk.Frame(self.trace_panel, bg="#333333", width=4, cursor="size_we")
+        self.trace_resize_handle.pack(side="left", fill="y")
+        self.trace_resize_handle.bind("<Button-1>", self.start_trace_resize)
+        self.trace_resize_handle.bind("<B1-Motion>", self.drag_trace_resize)
+
         # 1. Section trace système (haut, prend 45% de la hauteur disponible)
         self.sys_trace_frame = tk.Frame(self.trace_panel, bg="#1e1e1e")
         self.sys_trace_frame.pack(side="top", expand=True, fill="both", pady=(0, 2))
@@ -380,9 +386,15 @@ class AnnaGUI:
         # Conteneur pour afficher les miniatures des pièces jointes (non packé par défaut)
         self.attachments_frame = tk.Frame(self.right_frame, bg="#121212")
 
+        # Separator for vertical resizing of the input area
+        self.input_resize_separator = tk.Frame(self.right_frame, bg="#121212", height=6, cursor="size_ns")
+        self.input_resize_separator.pack(fill="x", padx=5, pady=2)
+        self.input_resize_separator.bind("<Button-1>", self.start_input_resize)
+        self.input_resize_separator.bind("<B1-Motion>", self.drag_input_resize)
+
         # Zone de saisie (tk.Text pour permettre le multi-ligne)
         self.input_frame = tk.Frame(self.right_frame, bg="#121212")
-        self.input_frame.pack(fill="x", padx=5, pady=5)
+        self.input_frame.pack(fill="x", padx=5, pady=(2, 5))
 
         # Boutons à droite
         self.help_button = tk.Button(self.input_frame, text=" ? ", command=self.show_help, bg="#444444", fg="white", activebackground="#666666", activeforeground="white", relief="flat", padx=10)
@@ -418,10 +430,15 @@ class AnnaGUI:
         )
         self.mic_button.pack(side="right", fill="y", padx=(5, 0))
 
+        # Conteneur pour la zone de texte afin de permettre un redimensionnement en pixels
+        self.user_input_container = tk.Frame(self.input_frame, bg="#121212", height=70)
+        self.user_input_container.pack(side="left", expand=True, fill="both")
+        self.user_input_container.pack_propagate(False)
+
         # Puis la zone de texte qui prend tout le reste de la place
-        self.user_input = tk.Text(self.input_frame, font=("Arial", 11), bg="#333333", fg="white", 
-                                  insertbackground="white", relief="flat", bd=5, height=3)
-        self.user_input.pack(side="left", expand=True, fill="x")
+        self.user_input = tk.Text(self.user_input_container, font=("Arial", 11), bg="#333333", fg="white", 
+                                  insertbackground="white", relief="flat", bd=5, wrap=tk.WORD)
+        self.user_input.pack(expand=True, fill="both")
         
         # Bindings
         self.attachments = []
@@ -812,6 +829,38 @@ class AnnaGUI:
             self.trace_visible = True
             self.trace_toggle_btn.config(bg="#bb86fc", fg="black")
 
+    def start_trace_resize(self, event):
+        self.trace_drag_start_x = event.x_root
+        self.trace_drag_start_width = self.trace_panel.winfo_width()
+
+    def drag_trace_resize(self, event):
+        dx = event.x_root - self.trace_drag_start_x
+        new_width = self.trace_drag_start_width - dx
+        if new_width < 150:
+            new_width = 150
+        max_width = int(self.chat_and_trace_container.winfo_width() * 0.5)
+        if max_width < 150:
+            max_width = 150
+        if new_width > max_width:
+            new_width = max_width
+        self.trace_panel.config(width=new_width)
+
+    def start_input_resize(self, event):
+        self.input_drag_start_y = event.y_root
+        self.input_drag_start_height = self.user_input_container.winfo_height()
+
+    def drag_input_resize(self, event):
+        dy = event.y_root - self.input_drag_start_y
+        new_height = self.input_drag_start_height - dy
+        if new_height < 45:
+            new_height = 45
+        max_height = int(self.right_frame.winfo_height() * 0.4)
+        if max_height < 45:
+            max_height = 45
+        if new_height > max_height:
+            new_height = max_height
+        self.user_input_container.config(height=new_height)
+
     def update_trace_content(self, text):
         try:
             self.trace_text_area.config(state='normal')
@@ -1097,7 +1146,7 @@ class AnnaGUI:
             return
             
         # Afficher le cadre au-dessus de la saisie
-        self.attachments_frame.pack(before=self.input_frame, fill="x", padx=5, pady=(0, 5))
+        self.attachments_frame.pack(before=self.input_resize_separator, fill="x", padx=5, pady=(0, 5))
         
         # Conserver les références d'images Tkinter pour empêcher le garbage collection
         self.attachment_photos = []
