@@ -469,6 +469,20 @@ class AnnaGUI:
                 self.settings, force=is_manual
             )
             
+            # Traitement selon le mode d'installation
+            if mode == "GIT_MISSING":
+                if is_manual:
+                    self.root.after(0, self._handle_git_missing_gui)
+                self.root.after(0, lambda: self.update_status("Prêt", active=False))
+                return
+                
+            elif mode == "ZIP_INSTALL":
+                if is_manual:
+                    self.root.after(0, self._handle_zip_install_gui)
+                self.root.after(0, lambda: self.update_status("Prêt", active=False))
+                return
+                
+            # Mode normal : GIT_CLONE
             if update_available:
                 if error_msg == "local_changes":
                     if is_manual:
@@ -504,6 +518,129 @@ class AnnaGUI:
             self.root.after(0, lambda: self.update_status("Prêt", active=False))
         finally:
             self.root.after(0, lambda: self.update_check_btn.config(state="normal"))
+
+    def _handle_git_missing_gui(self):
+        import webbrowser
+        import update_manager
+        ans = messagebox.askyesno(
+            "Git absent",
+            "Git est requis pour pouvoir mettre à jour Anna automatiquement.\n\n"
+            "Voulez-vous tenter de l'installer automatiquement avec winget ?"
+        )
+        if ans:
+            self.update_status("Installation de Git...", active=True)
+            def run_install():
+                success, method = update_manager.install_git()
+                if success:
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "Installation réussie",
+                        "Git a été installé avec succès !\n\nVeuillez redémarrer Anna pour prendre en compte l'installation de Git."
+                    ))
+                else:
+                    self.root.after(0, self._prompt_git_website_fallback)
+                self.root.after(0, lambda: self.update_status("Prêt", active=False))
+            import threading
+            threading.Thread(target=run_install, daemon=True).start()
+        else:
+            ans_web = messagebox.askyesno(
+                "Visiter le site officiel",
+                "Voulez-vous ouvrir le site officiel de Git dans votre navigateur pour l'installer manuellement ?"
+            )
+            if ans_web:
+                webbrowser.open("https://git-scm.com")
+
+    def _prompt_git_website_fallback(self):
+        import webbrowser
+        ans = messagebox.askyesno(
+            "Échec de l'installation",
+            "L'installation automatique de Git via winget a échoué.\n\n"
+            "Voulez-vous ouvrir la page officielle de téléchargement de Git pour l'installer manuellement ?"
+        )
+        if ans:
+            webbrowser.open("https://git-scm.com")
+
+    def _handle_zip_install_gui(self):
+        import update_manager
+        ans = messagebox.askyesno(
+            "Conversion ZIP vers Git",
+            "Votre installation d'Anna provient actuellement d'un fichier ZIP.\n\n"
+            "Pour bénéficier des futures mises à jour automatiques via Git, "
+            "voulez-vous convertir cette installation en dépôt Git ?"
+        )
+        if ans:
+            self.update_status("Initialisation Git...", active=True)
+            def run_conversion():
+                success, matches_official, err_msg = update_manager.convert_zip_to_git_step1()
+                if not success:
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Échec de la conversion",
+                        f"La préparation de la conversion a échoué :\n{err_msg}"
+                    ))
+                    self.root.after(0, lambda: self.update_status("Prêt", active=False))
+                    return
+                
+                if matches_official:
+                    s2_success, s2_err = update_manager.convert_zip_to_git_step2(force_sync=False)
+                    if s2_success:
+                        self.root.after(0, lambda: messagebox.showinfo(
+                            "Conversion réussie",
+                            "Conversion réussie ! Anna est désormais reliée au dépôt Git officiel.\n\n"
+                            "Nous allons maintenant vérifier s'il y a des mises à jour."
+                        ))
+                        self.root.after(0, lambda: self.manual_update_check())
+                    else:
+                        self.root.after(0, lambda: messagebox.showerror(
+                            "Échec de la conversion",
+                            f"La finalisation de la conversion a échoué :\n{s2_err}"
+                        ))
+                    self.root.after(0, lambda: self.update_status("Prêt", active=False))
+                else:
+                    self.root.after(0, self._prompt_conversion_sync_dialog)
+            
+            import threading
+            threading.Thread(target=run_conversion, daemon=True).start()
+
+    def _prompt_conversion_sync_dialog(self):
+        import update_manager
+        msg = (
+            "Une version plus récente d'Anna est disponible ou votre installation a été modifiée localement.\n\n"
+            "Pour recevoir les futures mises à jour automatiques, vous pouvez synchroniser votre installation avec la version officielle actuelle.\n\n"
+            "Si vous préférez conserver votre installation actuelle telle quelle, vous pouvez ignorer cette étape."
+        )
+        
+        ans = messagebox.askyesno(
+            "Choix de synchronisation",
+            msg + "\n\n--> Cliquer sur OUI pour SYNCHRONISER\n--> Cliquer sur NON pour CONSERVER votre version actuelle"
+        )
+        
+        def finish_conversion(sync):
+            if sync:
+                self.update_status("Synchronisation avec la version officielle...", active=True)
+                s2_success, s2_err = update_manager.convert_zip_to_git_step2(force_sync=True)
+                if s2_success:
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "Synchronisation réussie",
+                        "Synchronisation et conversion réussies !\n\n"
+                        "Nous allons maintenant vérifier les mises à jour."
+                    ))
+                    self.root.after(0, lambda: self.manual_update_check())
+                else:
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Échec de la synchronisation",
+                        f"La synchronisation a échoué :\n{s2_err}"
+                    ))
+                self.root.after(0, lambda: self.update_status("Prêt", active=False))
+            else:
+                self.update_status("Annulation de la conversion...", active=True)
+                update_manager.convert_zip_to_git_cleanup()
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "Conversion annulée",
+                    "Conversion annulée. Vos fichiers n'ont pas été modifiés et les mises à jour Git ne sont pas activées."
+                ))
+                self.root.after(0, lambda: self.update_status("Prêt", active=False))
+                
+        import threading
+        threading.Thread(target=lambda: finish_conversion(ans), daemon=True).start()
 
     def _prompt_update(self, latest_version, mode):
         self.update_status("Mise à jour disponible", active=True)
