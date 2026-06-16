@@ -342,6 +342,10 @@ class AnnaGUI:
 
         self.chat_area = scrolledtext.ScrolledText(self.chat_and_trace_container, wrap=tk.WORD, state='disabled', font=("Arial", 11), bg="#1e1e1e", fg="#e0e0e0", insertbackground="white", bd=0)
         self.chat_area.pack(side="left", expand=True, fill="both")
+        
+        # Associer les événements d'entrée et de sortie pour changer le curseur sur le tag clickable_name
+        self.chat_area.tag_bind("clickable_name", "<Enter>", lambda event: self.chat_area.config(cursor="hand2"))
+        self.chat_area.tag_bind("clickable_name", "<Leave>", lambda event: self.chat_area.config(cursor=""))
 
         # Panneau latéral de trace (masqué par défaut)
         self.trace_panel = tk.Frame(self.chat_and_trace_container, bg="#1e1e1e", width=280, highlightbackground="#333333", highlightthickness=1)
