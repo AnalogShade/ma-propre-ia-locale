@@ -740,6 +740,26 @@ class AnnaGUI:
         else:
             return "", accumulated_text
 
+    def clean_chat_text_blocks(self, text):
+        if not text:
+            return ""
+        import re
+        # Enlever les blocs SEARCH/REPLACE
+        text = re.sub(r"<<<<<<< SEARCH.*?>>>>>>> REPLACE", "[Bloc de modification de code]", text, flags=re.DOTALL)
+        # Enlever les blocs CREATE
+        text = re.sub(r"<<<<<<< CREATE.*?>>>>>>> CREATE", "[Bloc de création de fichier]", text, flags=re.DOTALL)
+        # Enlever les blocs EXECUTE_COMMAND
+        text = re.sub(r"<<<<<<< EXECUTE_COMMAND.*?>>>>>>> EXECUTE_COMMAND", "[Bloc d'exécution de commande]", text, flags=re.DOTALL)
+        
+        # Nettoyer les lignes "FILE: ..." isolées si elles restent après la suppression des blocs
+        lines = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("FILE:") and (stripped.endswith(".html") or stripped.endswith(".css") or stripped.endswith(".js") or stripped.endswith(".py") or stripped.endswith(".txt") or len(stripped) < 50):
+                continue
+            lines.append(line)
+        return "\n".join(lines)
+
     def start_streaming_response(self, sender):
         try:
             self.chat_area.config(state='normal')
@@ -756,6 +776,9 @@ class AnnaGUI:
             self.is_streamed = True
             self.accumulated_response = ""
             self.printed_final_text_len = 0
+            
+            # Enregistrer l'index de départ du contenu du message
+            self.streaming_start_index = self.chat_area.index("end-1c")
         except Exception:
             pass
 
@@ -771,6 +794,13 @@ class AnnaGUI:
     def finalize_streaming_response(self, full_text):
         try:
             self.chat_area.config(state='normal')
+            
+            # Supprimer le texte brut streamé pour éviter l'affichage de code brut redondant
+            if hasattr(self, "streaming_start_index"):
+                self.chat_area.delete(self.streaming_start_index, tk.END)
+                cleaned = self.clean_chat_text_blocks(full_text)
+                self.chat_area.insert(tk.END, cleaned)
+                
             self.chat_area.insert(tk.END, "\n")
             self.chat_area.config(state='disabled')
             self.chat_area.yview(tk.END)
@@ -779,13 +809,14 @@ class AnnaGUI:
             self.chat_area.tag_config("clickable_name", foreground="#03dac6", underline=True)
             
             if self.current_streaming_tag:
+                cleaned_for_tts = self.clean_chat_text_blocks(full_text)
                 self.chat_area.tag_bind(
                     self.current_streaming_tag,
                     "<Button-1>",
-                    lambda e, msg=full_text, tid=self.current_streaming_tag: self.play_tts(msg, tid)
+                    lambda e, msg=cleaned_for_tts, tid=self.current_streaming_tag: self.play_tts(msg, tid)
                 )
-        except Exception:
-            pass
+        except Exception as ex:
+            print(f"[GUI ERROR] Erreur dans finalize_streaming_response : {ex}")
 
     def handle_stream_chunk(self, chunk):
         self.accumulated_response += chunk
@@ -816,12 +847,14 @@ class AnnaGUI:
             self.msg_counter += 1
             self.chat_area.insert(tk.END, f"\n{sender} : ", ("bold", "clickable_name", tag_name))
             
-            # Bind the click event to play TTS for this specific message (toggle mode)
-            self.chat_area.tag_bind(tag_name, "<Button-1>", lambda e, msg=message, tid=tag_name: self.play_tts(msg, tid))
+            # Nettoyer le message pour le chat et pour le TTS
+            cleaned_message = self.clean_chat_text_blocks(message)
+            self.chat_area.tag_bind(tag_name, "<Button-1>", lambda e, msg=cleaned_message, tid=tag_name: self.play_tts(msg, tid))
+            self.chat_area.insert(tk.END, f"{cleaned_message}\n")
         else:
             self.chat_area.insert(tk.END, f"\n{sender} : ", "bold")
+            self.chat_area.insert(tk.END, f"{message}\n")
             
-        self.chat_area.insert(tk.END, f"{message}\n")
         self.chat_area.config(state='disabled')
         self.chat_area.yview(tk.END)
         # Couleurs des tags pour le mode sombre
@@ -1546,42 +1579,37 @@ Note : Shift + Entrée pour un saut de ligne."""
             diff_frame.pack(fill="x")
             
         # Titre du bloc
-        title_label = tk.Label(diff_frame, text=f"📄 {file_path}", bg="#1e1e1e", fg="#03dac6", font=("Arial", 10, "bold"), anchor="w")
+        title_text = f"📂 CRÉATION DE FICHIER : {file_path}" if block_type == "create" else f"📂 MODIFICATION DE FICHIER : {file_path}"
+        title_label = tk.Label(diff_frame, text=title_text, bg="#1e1e1e", fg="#bb86fc", font=("Arial", 10, "bold"), anchor="w")
         title_label.pack(fill="x", pady=(0, 10))
         
         # Affichage du contenu
         text_frame = tk.Frame(diff_frame, bg="#2a2a2a", bd=0)
-        text_frame.pack(fill="x", pady=(0, 10))
+        text_frame.pack(fill="both", expand=True, pady=(0, 10))
         
-        # Ajout d'une barre de défilement verticale
-        text_scrollbar = tk.Scrollbar(text_frame)
-        text_scrollbar.pack(side="right", fill="y")
+        # Calcul de la hauteur exacte pour éviter un scrollbar inutile
+        num_lines = len(create_content.splitlines()) if block_type == "create" else len(search_content.splitlines()) + len(replace_content.splitlines()) + 1
+        height_val = min(15, max(3, num_lines))
         
         # Zone de texte
-        text_area = tk.Text(text_frame, wrap="none", height=min(10, max(3, len(create_content.splitlines()) if block_type == "create" else len(search_content.splitlines()) + len(replace_content.splitlines()))), bg="#121212", fg="#e0e0e0", insertbackground="white", relief="flat", bd=0, font=("Courier New", 9), yscrollcommand=text_scrollbar.set)
-        text_area.pack(fill="x", side="left", expand=True)
-        text_scrollbar.config(command=text_area.yview)
+        text_area = tk.Text(text_frame, wrap="none", height=height_val, bg="#2d2d2d", fg="#e0e0e0", insertbackground="white", relief="flat", bd=0, font=("Consolas", 10))
+        text_area.pack(fill="both", expand=True)
+        
+        text_area.tag_config("minus", background="#4a1515", foreground="#ff8080")
+        text_area.tag_config("plus", background="#154a15", foreground="#80ff80")
+        text_area.tag_config("info", foreground="#888888")
         
         if block_type == "create":
-            text_area.insert("end", create_content)
-            # Désactiver l'édition
-            text_area.config(state="disabled")
+            for line in create_content.splitlines():
+                text_area.insert("end", f"+ {line}\n", "plus")
         else:
-            # Insérer le diff
-            text_area.insert("end", "<<<<<<< SEARCH\n", "search_header")
-            text_area.insert("end", search_content + "\n", "search")
-            text_area.insert("end", "=======\n", "sep_header")
-            text_area.insert("end", replace_content + "\n", "replace")
-            text_area.insert("end", ">>>>>>> REPLACE", "replace_header")
-            
-            # Définition des couleurs des tags
-            text_area.tag_config("search_header", fg="#ff5555")
-            text_area.tag_config("search", fg="#ff7777")
-            text_area.tag_config("sep_header", fg="#03dac6")
-            text_area.tag_config("replace", fg="#80ff80")
-            text_area.tag_config("replace_header", fg="#03dac6")
-            
-            text_area.config(state="disabled")
+            for line in search_content.splitlines():
+                text_area.insert("end", f"- {line}\n", "minus")
+            text_area.insert("end", "=========================================\n", "info")
+            for line in replace_content.splitlines():
+                text_area.insert("end", f"+ {line}\n", "plus")
+                
+        text_area.config(state="disabled")
             
         # Cadre des boutons
         btn_frame = tk.Frame(diff_frame, bg="#1e1e1e")

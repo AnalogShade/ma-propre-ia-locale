@@ -135,13 +135,22 @@ class AgentController:
                     except Exception:
                         pass
                 
-                # Formater les nouveaux messages
+                # Formater les nouveaux messages (en nettoyant les blocs de code volumineux)
+                import re
                 new_messages_text = ""
                 for msg in new_messages_slice:
                     role_display = "Vous" if msg["role"] == "user" else "Anna"
                     timestamp = msg.get("timestamp", "")
                     ts_display = f" [{timestamp}]" if timestamp else ""
-                    new_messages_text += f"{ts_display} {role_display} : {msg['content']}\n"
+                    
+                    content = msg.get("content", "")
+                    if content:
+                        content = re.sub(r"<<<<<<< SEARCH.*?>>>>>>> REPLACE", "[Bloc de modification de code]", content, flags=re.DOTALL)
+                        content = re.sub(r"<<<<<<< CREATE.*?>>>>>>> CREATE", "[Bloc de création de fichier]", content, flags=re.DOTALL)
+                        content = re.sub(r"<<<<<<< EXECUTE_COMMAND.*?>>>>>>> EXECUTE_COMMAND", "[Bloc d'exécution de commande]", content, flags=re.DOTALL)
+                        content = re.sub(r"FILE:\s*\S+", "", content)
+                        
+                    new_messages_text += f"{ts_display} {role_display} : {content}\n"
                 
                 # Construire le prompt de consolidation
                 prompt = f"""Tu es un outil d'archivage et de compression de contexte. 

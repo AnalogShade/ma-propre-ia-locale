@@ -332,9 +332,24 @@ class AIEngine:
             _safe_print(f"\n[DIAGNOSTIC] EXACT SYSTEM PROMPT + INJECTED MEMORY:\n{system_content}\n")
 
             # 2. Nettoyage des messages (role, content et optionnellement images)
+            def clean_history_content(text):
+                if not text:
+                    return ""
+                import re
+                # Enlever les blocs SEARCH/REPLACE
+                text = re.sub(r"<<<<<<< SEARCH.*?>>>>>>> REPLACE", "[Bloc de modification de code]", text, flags=re.DOTALL)
+                # Enlever les blocs CREATE
+                text = re.sub(r"<<<<<<< CREATE.*?>>>>>>> CREATE", "[Bloc de création de fichier]", text, flags=re.DOTALL)
+                # Enlever les blocs EXECUTE_COMMAND
+                text = re.sub(r"<<<<<<< EXECUTE_COMMAND.*?>>>>>>> EXECUTE_COMMAND", "[Bloc d'exécution de commande]", text, flags=re.DOTALL)
+                # Enlever les mentions FILE:
+                text = re.sub(r"FILE:\s*\S+", "", text)
+                return text
+
             clean_context = []
             for m in context_messages:
-                clean_msg = {"role": m["role"], "content": m["content"]}
+                cleaned_content = clean_history_content(m["content"])
+                clean_msg = {"role": m["role"], "content": cleaned_content}
                 if "images" in m:
                     clean_msg["images"] = m["images"]
                 clean_context.append(clean_msg)
