@@ -73,5 +73,13 @@ def test_file_manager_and_editor():
     success, msg = editor.create_file("../../outside.py", "print('Malicious')", working_dir=fm.working_dir)
     print(f"Test de sécurité (écriture hors limite): Succès={success} (Attendu: False) | Msg={msg}")
 
+    # 8. Test de close_working_dir
+    success, msg = fm.close_working_dir()
+    print(f"Test close_working_dir: Succès={success} | Msg={msg}")
+    print(f"État fm.working_dir après fermeture: {fm.working_dir} (Attendu: None)")
+    print(f"État fm.loaded_files après fermeture: {fm.loaded_files} (Attendu: {{}})")
+    print(f"État fm.current_file_path après fermeture: {fm.current_file_path} (Attendu: None)")
+
+
 if __name__ == "__main__":
     test_file_manager_and_editor()

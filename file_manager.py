@@ -276,6 +276,17 @@ class FileManager:
         self._reset_current_file(None)
         return True, "Tous les fichiers ont été fermés."
 
+    def close_working_dir(self):
+        """Ferme le répertoire de travail courant et réinitialise l'état associé."""
+        old_dir = self.working_dir
+        self.working_dir = None
+        self.loaded_files.clear()
+        self._reset_current_file(None)
+        if old_dir:
+            return True, f"Répertoire de travail '{old_dir}' fermé."
+        return True, "Répertoire de travail fermé."
+
+
     def list_files(self):
         if self.loaded_files:
             loaded_names = list(self.loaded_files.keys())

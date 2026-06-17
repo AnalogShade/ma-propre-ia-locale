@@ -79,6 +79,45 @@ class ConfirmVisionRiskDialog(tk.Toplevel):
         self.destroy()
 
 
+class ToolTip:
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tip_window = None
+        widget.bind("<Enter>", self.show_tip)
+        widget.bind("<Leave>", self.hide_tip)
+
+    def show_tip(self, event=None):
+        if self.tip_window or not self.text:
+            return
+        x = self.widget.winfo_pointerx() + 10
+        y = self.widget.winfo_pointery() + 10
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        
+        label = tk.Label(
+            tw, 
+            text=self.text, 
+            justify=tk.LEFT,
+            background="#2e2e2e", 
+            foreground="#e0e0e0", 
+            relief=tk.SOLID, 
+            borderwidth=1,
+            highlightthickness=0,
+            font=("Arial", 9, "normal"),
+            padx=5,
+            pady=3
+        )
+        label.pack()
+
+    def hide_tip(self, event=None):
+        tw = self.tip_window
+        self.tip_window = None
+        if tw:
+            tw.destroy()
+
+
 class AnnaGUI:
     def __init__(self, engine, memory, checker_results=None):
         # Démarrage de la capture des flux console (stdout/stderr)
@@ -267,6 +306,56 @@ class AnnaGUI:
 
         # Lancement de la détection asynchrone des checkpoints Stable Diffusion
         threading.Thread(target=self._detect_sd_checkpoints_thread, daemon=True).start()
+
+        # Cadre pour la sélection de projet/dossier
+        self.project_frame = tk.Frame(self.left_panel, bg="#1e1e1e", highlightbackground="#333333", highlightthickness=1)
+        self.project_frame.pack(side="top", fill="x", pady=(15, 0))
+
+        self.project_inner = tk.Frame(self.project_frame, bg="#1e1e1e")
+        self.project_inner.pack(fill="x", padx=15, pady=10)
+
+        self.project_label = tk.Label(
+            self.project_inner, 
+            text="📁 Aucun projet", 
+            bg="#1e1e1e", 
+            fg="#e0e0e0", 
+            font=("Arial", 9, "bold"),
+            anchor="w"
+        )
+        self.project_label.pack(side="left", fill="x", expand=True)
+
+        self.open_proj_btn = tk.Button(
+            self.project_inner, 
+            text="📂", 
+            command=self.gui_open_project, 
+            bg="#333333", 
+            fg="white", 
+            activebackground="#444444", 
+            activeforeground="white", 
+            relief="flat",
+            bd=0,
+            padx=5,
+            pady=3
+        )
+        self.open_proj_btn.pack(side="right", padx=(5, 0))
+
+        self.close_proj_btn = tk.Button(
+            self.project_inner, 
+            text="❌", 
+            command=self.gui_close_project, 
+            bg="#333333", 
+            fg="white", 
+            activebackground="#444444", 
+            activeforeground="white", 
+            relief="flat",
+            bd=0,
+            padx=5,
+            pady=3
+        )
+        self.close_proj_btn.pack(side="right", padx=(5, 0))
+
+        ToolTip(self.open_proj_btn, "📂 Ouvrir un projet ou un dossier")
+        ToolTip(self.close_proj_btn, "❌ Fermer le projet")
 
         # Cadre pour les actions d'utilitaires (Copie des logs)
         self.utils_frame = tk.Frame(self.left_panel, bg="#1e1e1e", highlightbackground="#333333", highlightthickness=1)
@@ -472,6 +561,101 @@ class AnnaGUI:
 
         # Lancement de la vérification automatique des mises à jour en tâche de fond (respecte la limite des 24h)
         threading.Thread(target=self._check_for_updates_bg, args=(False,), daemon=True).start()
+
+        self.update_project_ui()
+
+    def update_project_ui(self):
+        """Met à jour l'affichage du projet/dossier courant dans l'interface."""
+        working_dir = getattr(self.files, "working_dir", None)
+        if working_dir:
+            folder_name = os.path.basename(working_dir)
+            if not folder_name:  # Pour les répertoires racines comme C:\
+                folder_name = str(working_dir)
+            self.project_label.config(text=f"📁 {folder_name}", fg="#03dac6")
+        else:
+            self.project_label.config(text="📁 Aucun projet", fg="#e0e0e0")
+
+    def gui_open_project(self):
+        directory = filedialog.askdirectory(parent=self.root, title="Ouvrir un projet ou un dossier")
+        if not directory:
+            return
+        
+        directory = os.path.normpath(directory)
+        
+        self.generating = True
+        self.set_input_state(False)
+        self.update_status("Définition du répertoire de travail...", active=True)
+        
+        def run_open():
+            try:
+                success, msg = self.files.set_working_dir(directory)
+                
+                # Mettre à jour l'historique de conversation (mémoire)
+                self.memory.add_message("user", f"Ouvrir le projet : {directory}")
+                system_context = f"[{'SUCCÈS' if success else 'ERREUR'}] {msg}"
+                self.memory.add_message("assistant", system_context)
+                
+                def update_ui():
+                    self.append_chat("Vous", f"Ouvrir le projet : {directory}")
+                    if success:
+                        self.append_chat("Système", msg)
+                    else:
+                        self.append_chat("Système", f"⚠️ {msg}")
+                    
+                    self.generating = False
+                    self.set_input_state(True)
+                    self.update_status("Prêt", active=False)
+                    self.update_project_ui()
+                    
+                self.root.after(0, update_ui)
+            except Exception as e:
+                def on_err():
+                    self.generating = False
+                    self.set_input_state(True)
+                    self.update_status("Prêt", active=False)
+                    self.append_chat("Système", f"Erreur : {str(e)}")
+                self.root.after(0, on_err)
+                
+        threading.Thread(target=run_open, daemon=True).start()
+
+    def gui_close_project(self):
+        if not self.files.working_dir:
+            self.append_chat("Système", "Aucun projet n'est actuellement ouvert.")
+            return
+            
+        self.generating = True
+        self.set_input_state(False)
+        self.update_status("Fermeture du répertoire de travail...", active=True)
+        
+        def run_close():
+            try:
+                success, msg = self.files.close_working_dir()
+                
+                # Mettre à jour l'historique de conversation (mémoire)
+                self.memory.add_message("user", "Fermer le projet")
+                system_context = f"[SUCCÈS] {msg}"
+                self.memory.add_message("assistant", system_context)
+                
+                def update_ui():
+                    self.append_chat("Vous", "Fermer le projet")
+                    self.append_chat("Système", "Répertoire fermé")
+                    
+                    self.generating = False
+                    self.set_input_state(True)
+                    self.update_status("Prêt", active=False)
+                    self.update_project_ui()
+                    
+                self.root.after(0, update_ui)
+            except Exception as e:
+                def on_err():
+                    self.generating = False
+                    self.set_input_state(True)
+                    self.update_status("Prêt", active=False)
+                    self.append_chat("Système", f"Erreur : {str(e)}")
+                self.root.after(0, on_err)
+                
+        threading.Thread(target=run_close, daemon=True).start()
+
 
     # =========================================================================
     # SECTION MISE À JOUR : GESTIONNAIRE DE MISES À JOUR
@@ -1659,7 +1843,8 @@ Note : Shift + Entrée pour un saut de ligne."""
                         self.chat_area.insert(tk.END, "\n")
                         self.chat_area.config(state='disabled')
                         self.chat_area.yview(tk.END)
-                        
+                
+                self.update_project_ui()
             self.root.after(0, display_response_and_diffs)
         except Exception as e:
             # Vérifier si c'est un timeout d'Ollama (httpx.TimeoutException ou message contenant "timeout")
