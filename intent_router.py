@@ -9,27 +9,33 @@ class IntentRouter:
 
     def get_file_intent(self, user_input, sys_trace_callback=None):
         prompt = f"""Analyse le message de l'utilisateur pour détecter s'il demande une opération sur un répertoire ou fait référence à un ou plusieurs fichiers (pour les lire, les analyser, les ouvrir ou les modifier).
-Réponds UNIQUEMENT avec un objet JSON valide.
+Réponds UNIQUEMENT avec un objet JSON valide contenant "action" et "semantic_intent".
 
-Actions possibles :
-1. "set_working_dir" : Définit un nouveau répertoire de travail (ex: "Voici mon dossier C:\\Projet").
-   Requiert la clé "path_raw" contenant le chemin absolu.
-2. "load_context" : L'utilisateur fait référence à un ou plusieurs fichiers (ex: "ouvre main.py", "dans gui.py ajoute...", "regarde le code").
-   Requiert la clé "targets" contenant la liste des noms de fichiers (ex: ["main.py"]).
-3. "close_file" : Ferme le fichier actif (ex: "ferme le fichier").
-4. "reload_file" : Recharge le fichier actif (ex: "recharge le fichier").
-5. "none" : Conversation courante, salutations ou questions générales sans mention de fichier ou de dossier.
+Intentions sémantiques possibles ("semantic_intent") :
+1. "WORKSPACE_QUERY" : Consulter la structure, lister les fichiers du dossier, voir l'arborescence.
+2. "COMMAND_EXECUTION" : Demande d'exécuter un script, lancer des tests, démarrer un serveur, compiler.
+3. "CODE_ANALYSIS" : Lire, expliquer, analyser ou poser des questions sur du code existant sans le modifier.
+4. "CODE_MODIFICATION" : Demander d'écrire, modifier, corriger ou créer un fichier de code ou une fonctionnalité.
+5. "CHAT" : Salutations, bavardage ou questions d'ordre général.
+
+Actions système possibles ("action") :
+1. "set_working_dir" : Définit un nouveau répertoire de travail (ex: "Voici mon dossier C:\\Projet"). Requiert "path_raw".
+2. "load_context" : L'utilisateur fait référence à des fichiers. Requiert "targets" (liste de noms).
+3. "close_file" : Ferme le fichier actif.
+4. "reload_file" : Recharge le fichier actif.
+5. "none" : Conversation courante sans action système spécifique.
 
 RÈGLES CRITIQUES :
 1. Si l'utilisateur parle d'un fichier (même pour demander d'y ajouter ou modifier du code), retourne l'action "load_context" avec le ou les fichiers dans la liste "targets".
-2. Ne fais aucune supposition : si aucun fichier ou dossier n'est mentionné, retourne l'action "none".
+2. Choisis l'intention sémantique la plus appropriée selon le but final de l'utilisateur.
 
 EXEMPLES :
-- "Voici mon dossier C:\\Dev" -> {{"action": "set_working_dir", "path_raw": "C:\\\\Dev"}}
-- "Ouvre le fichier main.py" -> {{"action": "load_context", "targets": ["main.py"]}}
-- "Ajoute un bouton dans gui.py" -> {{"action": "load_context", "targets": ["gui.py"]}}
-- "Compare main.py et gui.py" -> {{"action": "load_context", "targets": ["main.py", "gui.py"]}}
-- "Comment vas-tu ?" -> {{"action": "none"}}
+- "Liste les fichiers du dossier" -> {{"action": "none", "semantic_intent": "WORKSPACE_QUERY"}}
+- "Voici mon dossier C:\\Dev" -> {{"action": "set_working_dir", "path_raw": "C:\\\\Dev", "semantic_intent": "CHAT"}}
+- "Ouvre le fichier main.py" -> {{"action": "load_context", "targets": ["main.py"], "semantic_intent": "CODE_ANALYSIS"}}
+- "Ajoute un bouton dans gui.py" -> {{"action": "load_context", "targets": ["gui.py"], "semantic_intent": "CODE_MODIFICATION"}}
+- "Lance les tests" -> {{"action": "none", "semantic_intent": "COMMAND_EXECUTION"}}
+- "Comment vas-tu ?" -> {{"action": "none", "semantic_intent": "CHAT"}}
 
 Message : "{user_input}"
 JSON :"""
@@ -77,7 +83,7 @@ JSON :"""
             valid_actions = ["set_working_dir", "open_file", "close_file", "reload_file", "load_context", "none"]
             if action not in valid_actions:
                 print(f"  [DEBUG ROUTER] Action non reconnue : {action}")
-                return {"action": "none", "path_raw": None, "targets": []}
+                return {"action": "none", "path_raw": None, "targets": [], "semantic_intent": "CHAT"}
                 
             # Validation 3: path_raw type
             path_raw = data.get('path_raw')
@@ -96,8 +102,10 @@ JSON :"""
             targets = [str(t).strip() for t in targets if t]
             data['targets'] = targets
             data['path_raw'] = path_raw
+            if 'semantic_intent' not in data:
+                data['semantic_intent'] = "CHAT"
                 
-            print(f"  [DEBUG ROUTER] Intent détecté : {action}")
+            print(f"  [DEBUG ROUTER] Intent détecté : {action} | Sémantique : {data['semantic_intent']}")
             if path_raw:
                 print(f"  [DEBUG ROUTER] Chemin extrait brut : {path_raw}")
             if targets:
@@ -109,13 +117,13 @@ JSON :"""
             if sys_trace_callback:
                 sys_trace_callback(f"[Appel LLM] Échec parsing JSON : routage d'intention (Durée : {duration:.2f}s) - Erreur : {e}")
             print(f"  [DEBUG ROUTER] Erreur de parsing JSON stricte. Réponse brute : {raw_content}")
-            return {"action": "none", "path_raw": None, "targets": []}
+            return {"action": "none", "path_raw": None, "targets": [], "semantic_intent": "CHAT"}
         except Exception as e:
             duration = time.time() - start_time
             if sys_trace_callback:
                 sys_trace_callback(f"[Appel LLM] Échec critique : routage d'intention (Durée : {duration:.2f}s) - Erreur : {e}")
             print(f"  [DEBUG ROUTER] Erreur inattendue : {e}")
-            return {"action": "none", "path_raw": None, "targets": []}
+            return {"action": "none", "path_raw": None, "targets": [], "semantic_intent": "CHAT"}
 
     def resolve_context_required(self, user_input, available_files, sys_trace_callback=None):
         """
@@ -238,6 +246,7 @@ JSON :"""
         action = intent.get("action", "none")
         path_raw = intent.get("path_raw")
         targets = intent.get("targets", [])
+        semantic_intent = intent.get("semantic_intent", "CHAT")
 
         # Garde-fou backend : rejeter les actions qui n'ont pas de chemin valide
         if action == "set_working_dir":
@@ -255,7 +264,8 @@ JSON :"""
             "handled": False,
             "action": action,
             "message": "",
-            "system_context": ""
+            "system_context": "",
+            "semantic_intent": semantic_intent
         }
 
         if action == "none":

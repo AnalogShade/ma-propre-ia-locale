@@ -52,20 +52,27 @@ class AgentController:
         # 3. Initialisation du gestionnaire de génération d'images (MVC)
         self.image_manager = ImageGenerationManager(self.engine)
 
-    def detect_working_mode(self, user_input, intent_action):
+    def detect_working_mode(self, user_input, intent_action, semantic_intent=None):
         """
         Détermine dynamiquement le mode de travail (CHAT ou CODE)
         et fournit la raison de cette classification.
         """
-        # 1. Règle absolue : si un ou plusieurs fichiers sont ouverts dans le workspace
+        # 1. Priorité LLM-First (Intention Sémantique)
+        if semantic_intent:
+            if semantic_intent in ["CODE_MODIFICATION", "CODE_ANALYSIS"]:
+                return "CODE", f"Intention sémantique détectée : {semantic_intent}"
+            elif semantic_intent in ["WORKSPACE_QUERY", "COMMAND_EXECUTION", "CHAT"]:
+                return "CHAT", f"Intention sémantique détectée : {semantic_intent}"
+
+        # 2. Règle absolue : si un ou plusieurs fichiers sont ouverts dans le workspace
         if self.files.loaded_files:
             return "CODE", "Fichier(s) ouvert(s) dans le workspace."
             
-        # 2. Règle sémantique : si l'action du routeur concerne le contexte de fichiers ou la recherche
+        # 3. Règle d'action : si l'action du routeur concerne le contexte de fichiers ou la recherche
         if intent_action in ["load_context", "open_file", "reload_file", "search"]:
             return "CODE", f"Intention technique détectée par le routeur ({intent_action})."
             
-        # 3. Règle heuristique : mots-clés techniques
+        # 4. Règle heuristique (Fallback) : mots-clés techniques
         import re
         technical_keywords = {
             "code", "python", "classe", "class", "fonction", "def", "import", "bug", "erreur", 
@@ -504,7 +511,11 @@ Règles strictes :
         
         # === ÉTAPE 1 : DÉTECTION ADAPTATIVE DU CONTEXTE (SQUELETTE DE LA PHASE 1) ===
         intent_action = intent_result.get("action") if isinstance(intent_result, dict) else None
-        active_mode, mode_reason = self.detect_working_mode(user_input, intent_action)
+        semantic_intent = intent_result.get("semantic_intent") if isinstance(intent_result, dict) else None
+        active_mode, mode_reason = self.detect_working_mode(user_input, intent_action, semantic_intent=semantic_intent)
+        
+        # Inhiber le planning_agent sauf si CODE_MODIFICATION (ou fallback legacy)
+        enable_planning = (semantic_intent == "CODE_MODIFICATION" or semantic_intent is None)
         
         # Enregistrement et log diagnostique
         mode_diag_report = (
@@ -623,39 +634,43 @@ Règles strictes :
             self.engine.system_prompt = SYSTEM_PROMPT_CODE
             
             # --- ÉTAPE A : PLANIFICATION TECHNIQUE MULTI-PASSES ---
-            if status_callback:
-                status_callback("Élaboration du plan technique...")
-            try:
-                from planning_agent import PlanningAgent
-                plan_text = PlanningAgent.generate_plan(
-                    engine=self.engine,
-                    context_messages=context,
-                    files_context=files_context,
-                    user_summary=user_summary,
-                    assistant_summary=assistant_summary,
-                    assistant_name=assistant_name
-                )
-                
-                # Injection du plan dans la zone diagnostic système existante
-                if sys_trace_callback and plan_text:
-                    planning_trace = (
-                        f"\n[DIAGNOSTIC AGENT - PLAN TECHNIQUE PROPOSÉ]\n"
-                        f"{plan_text}\n"
-                        f"[FIN DU PLAN]\n"
+            if enable_planning:
+                if status_callback:
+                    status_callback("Élaboration du plan technique...")
+                try:
+                    from planning_agent import PlanningAgent
+                    plan_text = PlanningAgent.generate_plan(
+                        engine=self.engine,
+                        context_messages=context,
+                        files_context=files_context,
+                        user_summary=user_summary,
+                        assistant_summary=assistant_summary,
+                        assistant_name=assistant_name
                     )
-                    sys_trace_callback(planning_trace)
                     
-                # Injection du plan technique comme consigne technique prioritaire pour l'appel d'édition principal
-                if plan_text:
-                    plan_injection = (
-                        f"\n\n--- PLAN TECHNIQUE À SUIVRE IMPÉRATIVEMENT ---\n"
-                        f"{plan_text}\n"
-                        f"Consigne : Exécute scrupuleusement le plan ci-dessus pour formuler ta réponse et tes modifications.\n"
-                        f"-----------------------------------------------\n"
-                    )
-                    files_context += plan_injection
-            except Exception as pe:
-                print(f"[PLANNING ERROR] Échec de la génération du plan : {pe}")
+                    # Injection du plan dans la zone diagnostic système existante
+                    if sys_trace_callback and plan_text:
+                        planning_trace = (
+                            f"\n[DIAGNOSTIC AGENT - PLAN TECHNIQUE PROPOSÉ]\n"
+                            f"{plan_text}\n"
+                            f"[FIN DU PLAN]\n"
+                        )
+                        sys_trace_callback(planning_trace)
+                        
+                    # Injection du plan technique comme consigne technique prioritaire pour l'appel d'édition principal
+                    if plan_text:
+                        plan_injection = (
+                            f"\n\n--- PLAN TECHNIQUE À SUIVRE IMPÉRATIVEMENT ---\n"
+                            f"{plan_text}\n"
+                            f"Consigne : Exécute scrupuleusement le plan ci-dessus pour formuler ta réponse et tes modifications.\n"
+                            f"-----------------------------------------------\n"
+                        )
+                        files_context += plan_injection
+                except Exception as pe:
+                    print(f"[PLANNING ERROR] Échec de la génération du plan : {pe}")
+            else:
+                if sys_trace_callback:
+                    sys_trace_callback("[Planning Agent] Contourné pour cette intention (Pas de modification demandée).")
 
         # Dimensionnement et diagnostic du prompt final
         sys_prompt_base = self.engine.system_prompt.strip().format(name=assistant_name)
