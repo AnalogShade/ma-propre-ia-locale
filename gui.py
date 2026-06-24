@@ -150,7 +150,9 @@ class AnnaGUI:
         
         if "stt" not in disabled_features:
             try:
+                stt_model = self.ctrl.settings.get_setting("stt_model", "tiny")
                 self.stt_manager = STTManager(
+                    model_name=stt_model,
                     on_model_ready=self._on_stt_ready,
                     on_model_error=self._on_stt_error
                 )
@@ -2476,8 +2478,8 @@ Note : Shift + Entrée pour un saut de ligne."""
     def show_context_settings_dialog(self):
         """Affiche une boîte de dialogue pour configurer la mémoire et la taille du contexte."""
         dialog = tk.Toplevel(self.root)
-        dialog.title("Réglages du Contexte")
-        dialog.geometry("450x380")
+        dialog.title("Réglages de l'application")
+        dialog.geometry("450x510")
         dialog.configure(bg="#1e1e1e")
         dialog.transient(self.root)
         dialog.grab_set()
@@ -2486,7 +2488,7 @@ Note : Shift + Entrée pour un saut de ligne."""
         dialog.geometry(f"+{self.root.winfo_x() + 100}+{self.root.winfo_y() + 100}")
 
         # Titre
-        tk.Label(dialog, text="⚙️ CONFIGURATION DU CONTEXTE DE L'IA", bg="#1e1e1e", fg="#bb86fc", font=("Arial", 11, "bold")).pack(pady=(15, 15))
+        tk.Label(dialog, text="⚙️ CONFIGURATION DES PARAMÈTRES", bg="#1e1e1e", fg="#bb86fc", font=("Arial", 11, "bold")).pack(pady=(15, 15))
 
         # Slider de taille de contexte
         tk.Label(dialog, text="Nombre de messages récents envoyés mot à mot (contexte chronologique) :", bg="#1e1e1e", fg="#e0e0e0", anchor="w").pack(fill="x", padx=20)
@@ -2562,7 +2564,96 @@ Note : Shift + Entrée pour un saut de ligne."""
         ctx_menu = tk.OptionMenu(dialog, ctx_var, *ctx_options)
         ctx_menu.configure(bg="#333333", fg="white", activebackground="#444444", activeforeground="white", relief="flat", highlightthickness=0, bd=0)
         ctx_menu["menu"].configure(bg="#333333", fg="white", activebackground="#03dac6", activeforeground="black")
-        ctx_menu.pack(anchor="w", padx=20, pady=(5, 10))
+        ctx_menu.pack(anchor="w", padx=20, pady=(5, 15))
+
+        # Section STT (Dictée vocale)
+        tk.Label(dialog, text="🎙️ DICTÉE VOCALE (STT) :", bg="#1e1e1e", fg="#bb86fc", font=("Arial", 9, "bold")).pack(anchor="w", padx=20, pady=(5, 5))
+        
+        current_stt_model = self.ctrl.settings.get_setting("stt_model", "tiny")
+        stt_var = tk.StringVar(value=current_stt_model)
+        
+        def on_stt_change():
+            selected = stt_var.get()
+            if selected == "small":
+                if self.stt_manager and not self.stt_manager.is_model_installed("small"):
+                    ans = messagebox.askyesno(
+                        "Téléchargement requis",
+                        "Le modèle amélioré 'small' (~460 Mo) n'est pas installé localement.\n"
+                        "Voulez-vous le télécharger et l'installer automatiquement ?\n"
+                        "Cela peut prendre plusieurs minutes selon votre connexion Internet.",
+                        parent=dialog
+                    )
+                    if ans:
+                        # Créer une fenêtre modale de chargement
+                        progress_win = tk.Toplevel(dialog)
+                        progress_win.title("Téléchargement")
+                        progress_win.geometry("320x130")
+                        progress_win.configure(bg="#1e1e1e")
+                        progress_win.transient(dialog)
+                        progress_win.grab_set()
+                        progress_win.geometry(f"+{dialog.winfo_x() + 65}+{dialog.winfo_y() + 120}")
+                        progress_win.protocol("WM_DELETE_WINDOW", lambda: None)  # Désactiver la fermeture manuelle
+                        
+                        tk.Label(
+                            progress_win,
+                            text="📥 Téléchargement du modèle de dictée...",
+                            bg="#1e1e1e",
+                            fg="white",
+                            font=("Arial", 10, "bold")
+                        ).pack(pady=(25, 10))
+                        
+                        tk.Label(
+                            progress_win,
+                            text="Veuillez patienter, cela peut prendre un moment...",
+                            bg="#1e1e1e",
+                            fg="#888888",
+                            font=("Arial", 8, "italic")
+                        ).pack(pady=(0, 10))
+                        
+                        def complete():
+                            dialog.after(0, lambda: [
+                                progress_win.destroy(),
+                                messagebox.showinfo("Succès", "Modèle de dictée 'small' installé avec succès !", parent=dialog)
+                            ])
+                            
+                        def error(err):
+                            dialog.after(0, lambda: [
+                                progress_win.destroy(),
+                                messagebox.showerror("Erreur", f"Échec du téléchargement :\n{err}", parent=dialog),
+                                stt_var.set("tiny")  # Revenir à tiny
+                            ])
+                            
+                        self.stt_manager.download_model("small", on_complete=complete, on_error=error)
+                    else:
+                        stt_var.set("tiny")
+        
+        r_tiny = tk.Radiobutton(
+            dialog,
+            text="Standard (tiny - rapide et léger)",
+            variable=stt_var,
+            value="tiny",
+            command=on_stt_change,
+            bg="#1e1e1e",
+            fg="#e0e0e0",
+            selectcolor="#333333",
+            activebackground="#1e1e1e",
+            activeforeground="white"
+        )
+        r_tiny.pack(anchor="w", padx=20, pady=(2, 2))
+        
+        r_small = tk.Radiobutton(
+            dialog,
+            text="Amélioré (small - plus précis, recommandé pour le Québec)",
+            variable=stt_var,
+            value="small",
+            command=on_stt_change,
+            bg="#1e1e1e",
+            fg="#e0e0e0",
+            selectcolor="#333333",
+            activebackground="#1e1e1e",
+            activeforeground="white"
+        )
+        r_small.pack(anchor="w", padx=20, pady=(2, 15))
 
         # Boutons Sauvegarder et Fermer
         btn_frame = tk.Frame(dialog, bg="#1e1e1e")
@@ -2573,7 +2664,18 @@ Note : Shift + Entrée pour un saut de ligne."""
             self.ctrl.settings.set_setting("enable_compressed_context", enable_var.get())
             self.ctrl.settings.set_setting("enable_auto_ollama", auto_ollama_var.get())
             self.ctrl.settings.set_setting("model_context_size", int(ctx_var.get()))
-            messagebox.showinfo("Succès", "Configuration du contexte sauvegardée avec succès !", parent=dialog)
+            
+            # Gérer le changement de modèle STT
+            old_stt_model = self.ctrl.settings.get_setting("stt_model", "tiny")
+            new_stt_model = stt_var.get()
+            if old_stt_model != new_stt_model:
+                self.ctrl.settings.set_setting("stt_model", new_stt_model)
+                if self.stt_manager:
+                    # Mettre à jour visuellement le bouton micro de la GUI
+                    self.mic_button.config(text="🔄", state="disabled")
+                    self.stt_manager.change_model(new_stt_model)
+                    
+            messagebox.showinfo("Succès", "Configuration sauvegardée avec succès !", parent=dialog)
             dialog.destroy()
 
         save_btn = tk.Button(btn_frame, text="✓ Enregistrer", command=save, bg="#03dac6", fg="black", activebackground="#018786", relief="flat", padx=15, pady=5)

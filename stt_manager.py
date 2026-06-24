@@ -12,12 +12,13 @@ import os
 import queue
 
 class STTManager:
-    def __init__(self, on_model_ready=None, on_model_error=None, 
+    def __init__(self, model_name="tiny", on_model_ready=None, on_model_error=None, 
                  silence_threshold=0.015, silence_duration_limit=0.8, 
                  pre_roll_duration=0.3, min_phrase_duration=0.3):
         if not HAS_STT_DEPS:
             raise ImportError("Dépendances manquantes pour STT (sounddevice, numpy, faster-whisper).")
         # États du modèle
+        self.model_name = model_name
         self.is_model_loading = False
         self.is_model_ready = False
         self.model_load_error = None
@@ -57,9 +58,11 @@ class STTManager:
     def _load_model_thread(self):
         """Thread de chargement du modèle."""
         try:
-            # On utilise le modèle "tiny" pour plus de rapidité en local
+            # Libérer l'ancien modèle s'il existe pour éviter la surconsommation de RAM
+            self.model = None
+            
             # compute_type="int8" permet de réduire l'utilisation de la RAM
-            self.model = WhisperModel("tiny", device="cpu", compute_type="int8")
+            self.model = WhisperModel(self.model_name, device="cpu", compute_type="int8")
             
             self.is_model_loading = False
             self.is_model_ready = True
@@ -73,6 +76,48 @@ class STTManager:
             print(f"[STT_MANAGER] Erreur chargement modèle : {e}")
             if self.on_model_error:
                 self.on_model_error(str(e))
+
+    def is_model_installed(self, model_name):
+        """Vérifie si le modèle est déjà présent dans le cache Hugging Face local."""
+        import os
+        # Essayer d'abord HF_HUB_CACHE puis HF_HOME
+        cache_dir = os.environ.get("HF_HUB_CACHE")
+        if not cache_dir:
+            hf_home = os.environ.get("HF_HOME")
+            if hf_home:
+                cache_dir = os.path.join(hf_home, "hub")
+            else:
+                cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+        
+        model_dir = os.path.join(cache_dir, f"models--Systran--faster-whisper-{model_name}")
+        return os.path.isdir(model_dir)
+
+    def download_model(self, model_name, on_complete=None, on_error=None):
+        """Télécharge le modèle spécifié depuis Hugging Face dans un thread séparé."""
+        def worker():
+            try:
+                from huggingface_hub import snapshot_download
+                repo_id = f"Systran/faster-whisper-{model_name}"
+                snapshot_download(repo_id=repo_id, local_files_only=False)
+                if on_complete:
+                    on_complete()
+            except Exception as e:
+                print(f"[STT_MANAGER] Erreur téléchargement modèle {model_name} : {e}")
+                if on_error:
+                    on_error(str(e))
+        
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
+
+    def change_model(self, new_model_name):
+        """Change le modèle de transcription et le recharge en arrière-plan."""
+        with self.lock:
+            if self.is_model_loading:
+                return False, "Un modèle est déjà en cours de chargement."
+            self.model_name = new_model_name
+            self.is_model_ready = False
+        self._load_model_in_background()
+        return True, "Rechargement lancé."
 
     def start_recording(self, on_phrase_transcribed=None, on_all_done=None):
         """Démarre la capture audio depuis le micro en mode streaming."""
@@ -186,7 +231,14 @@ class STTManager:
             audio_np = np.clip(audio_np, -1.0, 1.0)
             
             # Transcription directe via faster-whisper en passant le numpy array
-            segments, info = self.model.transcribe(audio_np, beam_size=5, language="fr")
+            # Si le modèle est "small", on lui donne un indice de contexte québécois / français canadien.
+            prompt = "Bonjour, c'est le Québec, au Canada." if self.model_name == "small" else "Bonjour."
+            segments, info = self.model.transcribe(
+                audio_np, 
+                beam_size=5, 
+                language="fr", 
+                initial_prompt=prompt
+            )
             text = " ".join([segment.text for segment in segments]).strip()
             
             if text and self.on_phrase_transcribed:
