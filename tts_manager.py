@@ -1,6 +1,7 @@
 import os
 import threading
 import urllib.request
+import re
 
 try:
     import sounddevice as sd
@@ -115,8 +116,15 @@ class TTSManager:
 
     def speak(self, text, on_start=None, on_finish=None):
         """Lit un texte à voix haute en streaming avec gestion de session."""
-        if not self.voice or not text.strip():
-            print("[TTS_MANAGER] Pas de voix chargée ou texte vide.")
+        # Nettoyage des émojis du texte pour éviter qu'ils ne soient prononcés par le moteur de synthèse
+        emoji_pattern = re.compile(r'[\U00010000-\U0010ffff]|[\u2600-\u27BF]|[\u200d\ufe0f\ufe0e]')
+        cleaned_text = emoji_pattern.sub('', text)
+        # Retrait des astérisques (utilisés pour le formatage markdown comme le gras ou l'italique)
+        cleaned_text = cleaned_text.replace('*', '')
+        cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
+
+        if not self.voice or not cleaned_text:
+            print("[TTS_MANAGER] Pas de voix chargée ou texte vide après nettoyage.")
             if on_finish: on_finish()
             return
             
@@ -138,7 +146,7 @@ class TTSManager:
                     stream.start()
                     
                     # Piper génère l'audio par petits morceaux (streaming)
-                    for chunk in self.voice.synthesize(text):
+                    for chunk in self.voice.synthesize(cleaned_text):
                         # Couper prématurément si demandé ou si une nouvelle session a démarré
                         if not self.is_playing or session_id != self.current_session:
                             break 
