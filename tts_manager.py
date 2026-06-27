@@ -14,14 +14,60 @@ except ImportError:
 
 VOICES_DIR = "voices"
 
-# Voix française par défaut (qualité medium, très bon compromis)
-DEFAULT_VOICE_URL_ONNX = "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/upmc/medium/fr_FR-upmc-medium.onnx?download=true"
-DEFAULT_VOICE_URL_JSON = "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/upmc/medium/fr_FR-upmc-medium.onnx.json?download=true"
+# Dictionnaire de configuration des voix Piper disponibles en français
+PIPER_VOICES = {
+    "fr_FR-siwis-medium": {
+        "name": "Féminine (Siwis - Fluide)",
+        "gender": "Féminin",
+        "realism": "Élevé (Recommandé)",
+        "size": "~16 Mo",
+        "onnx_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx?download=true",
+        "json_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json?download=true",
+        "description": "Voix féminine très naturelle et expressive, idéale pour une assistance fluide."
+    },
+    "fr_FR-upmc-medium": {
+        "name": "Féminine (UPMC - Standard)",
+        "gender": "Féminin",
+        "realism": "Standard",
+        "size": "~15 Mo",
+        "onnx_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/upmc/medium/fr_FR-upmc-medium.onnx?download=true",
+        "json_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/upmc/medium/fr_FR-upmc-medium.onnx.json?download=true",
+        "description": "Voix féminine claire et douce. La voix par défaut historique de l'application."
+    },
+    "fr_FR-siwis-low": {
+        "name": "Féminine Légère (Siwis - Low)",
+        "gender": "Féminin",
+        "realism": "Moyen",
+        "size": "~8 Mo",
+        "onnx_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/low/fr_FR-siwis-low.onnx?download=true",
+        "json_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/low/fr_FR-siwis-low.onnx.json?download=true",
+        "description": "Version plus légère de la voix féminine Siwis, consomme moins de ressources."
+    },
+    "fr_FR-tom-medium": {
+        "name": "Masculine Grave (Tom)",
+        "gender": "Masculin",
+        "realism": "Bon",
+        "size": "~15 Mo",
+        "onnx_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/tom/medium/fr_FR-tom-medium.onnx?download=true",
+        "json_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/tom/medium/fr_FR-tom-medium.onnx.json?download=true",
+        "description": "Voix masculine plus grave, posée et posée sur un ton calme."
+    },
+    "fr_FR-gilles-low": {
+        "name": "Masculine Rapide (Gilles)",
+        "gender": "Masculin",
+        "realism": "Standard",
+        "size": "~8 Mo",
+        "onnx_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/gilles/low/fr_FR-gilles-low.onnx?download=true",
+        "json_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/gilles/low/fr_FR-gilles-low.onnx.json?download=true",
+        "description": "Voix masculine légère de qualité standard, diction rapide."
+    }
+}
 
 class TTSManager:
+    PIPER_VOICES = PIPER_VOICES
+
     def __init__(self):
-        if not HAS_TTS_DEPS:
-            raise ImportError("Dépendances manquantes pour TTS (sounddevice, numpy).")
+        self.PIPER_VOICES = PIPER_VOICES
         self.voices_dir = VOICES_DIR
         if not os.path.exists(self.voices_dir):
             os.makedirs(self.voices_dir)
@@ -35,9 +81,26 @@ class TTSManager:
         self.lock = threading.RLock()
         self.volume = 0.5  # Volume par défaut à 50%
         
-        # Charger la première voix disponible par défaut
-        if self.available_voices:
-            self.load_voice(self.available_voices[0])
+        # Vérification dynamique des dépendances
+        self.has_deps = self.check_dependencies()
+        
+        # Charger une voix par défaut au démarrage si des voix sont disponibles
+        if self.has_deps and self.available_voices:
+            if "fr_FR-upmc-medium" in self.available_voices:
+                self.load_voice("fr_FR-upmc-medium")
+            else:
+                self.load_voice(self.available_voices[0])
+
+    def check_dependencies(self):
+        """Vérifie si les dépendances nécessaires à TTS sont importables."""
+        try:
+            import sounddevice as sd
+            import numpy as np
+            # Vérifier aussi si piper est installé
+            from piper.voice import PiperVoice
+            return True
+        except ImportError:
+            return False
 
     def _scan_voices(self):
         """Scanne le dossier local à la recherche de modèles Piper."""
@@ -52,25 +115,45 @@ class TTSManager:
         return voices
 
     def download_default_voice(self, on_progress=None):
-        """Télécharge une voix française par défaut depuis HuggingFace."""
+        """Rétrocompatibilité : télécharge la voix masculine UPMC par défaut."""
+        self.download_voice("fr_FR-upmc-medium", on_progress)
+
+    def download_voice(self, voice_id, on_progress=None, on_complete=None, on_error=None):
+        """Télécharge un modèle de voix spécifié depuis HuggingFace en tâche de fond."""
         def _download():
             try:
-                if on_progress: on_progress("Téléchargement modèle...")
-                onnx_path = os.path.join(self.voices_dir, "fr_FR-upmc-medium.onnx")
-                json_path = os.path.join(self.voices_dir, "fr_FR-upmc-medium.onnx.json")
+                voice_info = PIPER_VOICES.get(voice_id)
+                if not voice_info:
+                    raise ValueError(f"Voix non reconnue : {voice_id}")
                 
-                urllib.request.urlretrieve(DEFAULT_VOICE_URL_ONNX, onnx_path)
-                if on_progress: on_progress("Téléchargement config...")
-                urllib.request.urlretrieve(DEFAULT_VOICE_URL_JSON, json_path)
+                onnx_url = voice_info["onnx_url"]
+                json_url = voice_info["json_url"]
+                
+                onnx_path = os.path.join(self.voices_dir, f"{voice_id}.onnx")
+                json_path = os.path.join(self.voices_dir, f"{voice_id}.onnx.json")
+                
+                if on_progress: on_progress("Modèle : 0% (DL)...")
+                urllib.request.urlretrieve(onnx_url, onnx_path)
+                
+                if on_progress: on_progress("Config (DL)...")
+                urllib.request.urlretrieve(json_url, json_path)
                 
                 self.available_voices = self._scan_voices()
-                if self.available_voices:
-                    self.load_voice("fr_FR-upmc-medium")
+                
+                # Chargement automatique de la voix après téléchargement
+                if on_progress: on_progress("Chargement...")
+                loaded = self.load_voice(voice_id)
+                
+                if loaded:
+                    if on_progress: on_progress("Voix prête.")
+                    if on_complete: on_complete()
+                else:
+                    raise RuntimeError(f"Échec du chargement de la voix {voice_id}")
                     
-                if on_progress: on_progress("Voix prête.")
             except Exception as e:
-                print(f"[TTS_MANAGER] Erreur téléchargement voix: {e}")
+                print(f"[TTS_MANAGER] Erreur téléchargement voix {voice_id}: {e}")
                 if on_progress: on_progress("Erreur DL.")
+                if on_error: on_error(str(e))
         
         threading.Thread(target=_download, daemon=True).start()
 

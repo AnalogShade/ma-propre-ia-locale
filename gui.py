@@ -162,13 +162,23 @@ class AnnaGUI:
         else:
             self.stt_manager = None
 
-        if "tts" not in disabled_features:
-            try:
-                self.tts_manager = TTSManager()
-            except Exception as e:
-                print(f"[GUI TTS ERROR] {e}")
-                self.tts_manager = None
-        else:
+        self.tts_manager = None
+        try:
+            self.tts_manager = TTSManager()
+            if self.tts_manager.has_deps:
+                saved_voice = self.ctrl.settings.get_setting("selected_tts_voice")
+                if saved_voice and saved_voice in self.tts_manager.PIPER_VOICES:
+                    if saved_voice in self.tts_manager.get_voices():
+                        self.tts_manager.load_voice(saved_voice)
+                else:
+                    if "fr_FR-upmc-medium" in self.tts_manager.get_voices():
+                        self.tts_manager.load_voice("fr_FR-upmc-medium")
+                    elif self.tts_manager.get_voices():
+                        self.tts_manager.load_voice(self.tts_manager.get_voices()[0])
+            else:
+                print("[GUI TTS] Synthèse vocale désactivée : dépendances manquantes.")
+        except Exception as e:
+            print(f"[GUI TTS ERROR] {e}")
             self.tts_manager = None
         self.msg_counter = 0
         self.current_tts_tag = None
@@ -551,8 +561,10 @@ class AnnaGUI:
         # Configuration finale selon l'état des dépendances
         if not self.stt_manager:
             self.mic_button.config(text="🎙️ (Off)", state="disabled", fg="#555555")
-        if not self.tts_manager:
-            self.tts_button.config(text="🔊 (Off)", state="disabled", fg="#555555")
+        if not self.tts_manager or not self.tts_manager.has_deps:
+            self.tts_button.config(text="🔊 Voix (Off)", state="normal", fg="#ffb74d")
+        else:
+            self.tts_button.config(text="🔊 Voix", state="normal", fg="white")
         if checker_results and "sd" in checker_results.get("disabled_features", []):
             self.sd_generate_button.config(text="🖼️ (SD Off)", state="disabled", bg="#222222", fg="#666666")
 
@@ -909,25 +921,258 @@ class AnnaGUI:
         self.root.after(0, reset_gui)
 
     def show_voice_menu(self):
-        if not self.tts_manager:
-            messagebox.showwarning("Audio désactivé", "Le service de synthèse vocale (TTS) est indisponible.")
+        if not self.tts_manager or not self.tts_manager.has_deps:
+            ans = messagebox.askyesno(
+                "Dépendances manquantes",
+                "Les dépendances nécessaires pour la synthèse vocale (sounddevice, numpy, piper-tts) ne sont pas installées.\n"
+                "Voulez-vous les installer automatiquement maintenant ?",
+                parent=self.root
+            )
+            if ans:
+                self.install_tts_dependencies()
             return
-        menu = tk.Menu(self.root, tearoff=0, bg="#333333", fg="white", activebackground="#03dac6", activeforeground="black")
-        voices = self.tts_manager.get_voices()
-        
-        if not voices:
-            menu.add_command(label="T\u00e9l\u00e9charger voix FR (upmc-medium)", command=lambda: self.tts_manager.download_default_voice(self._on_tts_download_progress))
-        else:
-            for v in voices:
-                mark = "\u2713 " if v == self.tts_manager.current_voice_name else "  "
-                menu.add_command(label=f"{mark}{v}", command=lambda voice=v: self.tts_manager.load_voice(voice))
             
-            menu.add_separator()
-            menu.add_command(label="Arr\u00eater la lecture", command=self.tts_manager.stop)
+        menu = tk.Menu(self.root, tearoff=0, bg="#333333", fg="white", activebackground="#03dac6", activeforeground="black")
+        
+        # Parcourir toutes les voix configurées dans PIPER_VOICES
+        for voice_id, info in self.tts_manager.PIPER_VOICES.items():
+            installed = voice_id in self.tts_manager.get_voices()
+            
+            # Formater le libellé de l'option de menu
+            status = ""
+            if not installed:
+                status = f" [Non installé - {info['size']}]"
+            
+            # Coche de sélection
+            mark = "✓ " if voice_id == self.tts_manager.current_voice_name else "  "
+            label_text = f"{mark}{info['name']}{status}"
+            
+            # Clic sur l'élément du menu
+            menu.add_command(label=label_text, command=lambda vid=voice_id: self.select_voice_from_menu(vid))
+            
+        menu.add_separator()
+        menu.add_command(label="Arrêter la lecture", command=self.tts_manager.stop)
             
         x = self.root.winfo_pointerx()
         y = self.root.winfo_pointery()
         menu.tk_popup(x, y)
+
+    def select_voice_from_menu(self, voice_id):
+        """Gère la sélection d'une voix depuis le menu de l'avatar."""
+        if not self.tts_manager:
+            return
+        installed = voice_id in self.tts_manager.get_voices()
+        info = self.tts_manager.PIPER_VOICES.get(voice_id)
+        if not info:
+            return
+            
+        if not installed:
+            msg = (
+                f"📥 Téléchargement de modèle de voix requis\n\n"
+                f"La voix \"{info['name']}\" n'est pas encore installée localement.\n\n"
+                f"Caractéristiques de la voix :\n"
+                f"  • Sexe : {info['gender']}\n"
+                f"  • Réalisme : {info['realism']}\n"
+                f"  • Taille : {info['size']}\n"
+                f"  • Description : {info['description']}\n\n"
+                f"Voulez-vous la télécharger et l'installer automatiquement ?"
+            )
+            ans = messagebox.askyesno("Télécharger la voix ?", msg, parent=self.root)
+            if ans:
+                progress_win = tk.Toplevel(self.root)
+                progress_win.title("Téléchargement de voix")
+                progress_win.geometry("320x130")
+                progress_win.configure(bg="#1e1e1e")
+                progress_win.transient(self.root)
+                progress_win.grab_set()
+                progress_win.geometry(f"+{self.root.winfo_x() + 150}+{self.root.winfo_y() + 150}")
+                progress_win.protocol("WM_DELETE_WINDOW", lambda: None)
+                
+                title_lbl = tk.Label(progress_win, text="📥 Téléchargement de la voix...", bg="#1e1e1e", fg="white", font=("Arial", 10, "bold"))
+                title_lbl.pack(pady=(25, 10))
+                
+                sub_lbl = tk.Label(progress_win, text="Veuillez patienter...", bg="#1e1e1e", fg="#888888", font=("Arial", 8, "italic"))
+                sub_lbl.pack(pady=(0, 10))
+                
+                def on_progress(text):
+                    progress_win.after(0, lambda: sub_lbl.config(text=text))
+                    
+                def complete():
+                    def success():
+                        progress_win.destroy()
+                        self.ctrl.settings.set_setting("selected_tts_voice", voice_id)
+                        messagebox.showinfo("Succès", f"La voix '{info['name']}' a été installée et activée !", parent=self.root)
+                    progress_win.after(0, success)
+                    
+                def error(err_msg):
+                    def fail():
+                        progress_win.destroy()
+                        messagebox.showerror("Erreur", f"Échec du téléchargement :\n{err_msg}", parent=self.root)
+                    progress_win.after(0, fail)
+                    
+                self.tts_manager.download_voice(
+                    voice_id,
+                    on_progress=on_progress,
+                    on_complete=complete,
+                    on_error=error
+                )
+        else:
+            loaded = self.tts_manager.load_voice(voice_id)
+            if loaded:
+                self.ctrl.settings.set_setting("selected_tts_voice", voice_id)
+                messagebox.showinfo("Voix activée", f"La voix '{info['name']}' est maintenant active.", parent=self.root)
+            else:
+                messagebox.showerror("Erreur", f"Impossible de charger la voix '{info['name']}'.", parent=self.root)
+
+    def select_voice_from_settings(self, voice_id, parent_dialog, var):
+        """Gère la sélection d'une voix depuis le panneau de configuration."""
+        if not self.tts_manager:
+            return
+        installed = voice_id in self.tts_manager.get_voices()
+        info = self.tts_manager.PIPER_VOICES.get(voice_id)
+        if not info:
+            return
+            
+        if not installed:
+            msg = (
+                f"📥 Téléchargement de modèle de voix requis\n\n"
+                f"La voix \"{info['name']}\" n'est pas encore installée localement.\n\n"
+                f"Caractéristiques de la voix :\n"
+                f"  • Sexe : {info['gender']}\n"
+                f"  • Réalisme : {info['realism']}\n"
+                f"  • Taille : {info['size']}\n"
+                f"  • Description : {info['description']}\n\n"
+                f"Voulez-vous la télécharger et l'installer automatiquement ?"
+            )
+            ans = messagebox.askyesno("Télécharger la voix ?", msg, parent=parent_dialog)
+            if ans:
+                progress_win = tk.Toplevel(parent_dialog)
+                progress_win.title("Téléchargement de voix")
+                progress_win.geometry("320x130")
+                progress_win.configure(bg="#1e1e1e")
+                progress_win.transient(parent_dialog)
+                progress_win.grab_set()
+                progress_win.geometry(f"+{parent_dialog.winfo_x() + 65}+{parent_dialog.winfo_y() + 120}")
+                progress_win.protocol("WM_DELETE_WINDOW", lambda: None)
+                
+                title_lbl = tk.Label(progress_win, text="📥 Téléchargement de la voix...", bg="#1e1e1e", fg="white", font=("Arial", 10, "bold"))
+                title_lbl.pack(pady=(25, 10))
+                
+                sub_lbl = tk.Label(progress_win, text="Veuillez patienter...", bg="#1e1e1e", fg="#888888", font=("Arial", 8, "italic"))
+                sub_lbl.pack(pady=(0, 10))
+                
+                def on_progress(text):
+                    progress_win.after(0, lambda: sub_lbl.config(text=text))
+                    
+                def complete():
+                    def success():
+                        progress_win.destroy()
+                        messagebox.showinfo("Succès", f"La voix '{info['name']}' a été installée avec succès !", parent=parent_dialog)
+                    progress_win.after(0, success)
+                    
+                def error(err_msg):
+                    def fail():
+                        progress_win.destroy()
+                        messagebox.showerror("Erreur", f"Échec du téléchargement :\n{err_msg}", parent=parent_dialog)
+                        prev_voice = self.ctrl.settings.get_setting("selected_tts_voice", "fr_FR-upmc-medium")
+                        var.set(prev_voice)
+                    progress_win.after(0, fail)
+                    
+                self.tts_manager.download_voice(
+                    voice_id,
+                    on_progress=on_progress,
+                    on_complete=complete,
+                    on_error=error
+                )
+            else:
+                prev_voice = self.ctrl.settings.get_setting("selected_tts_voice", "fr_FR-upmc-medium")
+                var.set(prev_voice)
+
+    def install_tts_dependencies(self):
+        """Affiche une boîte de dialogue modale et lance l'installation des dépendances TTS."""
+        import subprocess
+        import sys
+        progress_win = tk.Toplevel(self.root)
+        progress_win.title("Installation des dépendances TTS")
+        progress_win.geometry("450x300")
+        progress_win.configure(bg="#1e1e1e")
+        progress_win.transient(self.root)
+        progress_win.grab_set()
+        progress_win.geometry(f"+{self.root.winfo_x() + 100}+{self.root.winfo_y() + 100}")
+        
+        tk.Label(
+            progress_win,
+            text="📥 Installation des dépendances de synthèse vocale...",
+            bg="#1e1e1e",
+            fg="#bb86fc",
+            font=("Arial", 11, "bold")
+        ).pack(pady=(15, 5))
+        
+        tk.Label(
+            progress_win,
+            text="Installation de sounddevice, numpy et piper-tts via pip.\nCela peut prendre une minute...",
+            bg="#1e1e1e",
+            fg="#e0e0e0",
+            justify="center"
+        ).pack(pady=(0, 10))
+        
+        log_text = tk.Text(
+            progress_win,
+            font=("Consolas", 8),
+            bg="#121212",
+            fg="#88ff88",
+            height=10,
+            relief="flat"
+        )
+        log_text.pack(fill="both", expand=True, padx=15, pady=(0, 15))
+        log_text.config(state="disabled")
+        
+        def write_log(msg):
+            log_text.config(state="normal")
+            log_text.insert(tk.END, msg)
+            log_text.see(tk.END)
+            log_text.config(state="disabled")
+            
+        def run_install():
+            try:
+                progress_win.after(0, lambda: write_log("Exécution de : pip install sounddevice numpy piper-tts\n"))
+                process = subprocess.Popen(
+                    [sys.executable, "-m", "pip", "install", "sounddevice", "numpy", "piper-tts"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
+                
+                for line in process.stdout:
+                    progress_win.after(0, lambda l=line: write_log(l))
+                    
+                process.wait()
+                
+                if process.returncode == 0:
+                    def success():
+                        progress_win.destroy()
+                        try:
+                            from tts_manager import TTSManager
+                            self.tts_manager = TTSManager()
+                            if self.tts_manager.has_deps:
+                                self.tts_button.config(text="🔊 Voix", fg="white", state="normal")
+                                messagebox.showinfo("Succès", "Dépendances de synthèse vocale installées avec succès !", parent=self.root)
+                                self.show_voice_menu()
+                            else:
+                                messagebox.showerror("Erreur", "L'installation a réussi, mais les modules ne peuvent toujours pas être chargés.", parent=self.root)
+                        except Exception as e:
+                            messagebox.showerror("Erreur", f"Erreur lors de l'initialisation de TTSManager : {e}", parent=self.root)
+                    progress_win.after(0, success)
+                else:
+                    def fail():
+                        messagebox.showerror("Erreur", f"L'installation a échoué avec le code de retour {process.returncode}.", parent=progress_win)
+                    progress_win.after(0, fail)
+            except Exception as e:
+                progress_win.after(0, lambda err=str(e): messagebox.showerror("Erreur", f"Une exception s'est produite :\n{err}", parent=progress_win))
+                
+        threading.Thread(target=run_install, daemon=True).start()
 
     def _on_tts_download_progress(self, msg):
         self.root.after(0, lambda: self.tts_button.config(text=msg))
@@ -952,7 +1197,7 @@ class AnnaGUI:
             self.volume_label.config(text=f"🔊 Volume : {volume_pct}%")
 
     def play_tts(self, message, tag_id):
-        if not self.tts_manager:
+        if not self.tts_manager or not self.tts_manager.has_deps or not self.tts_manager.voice:
             return
         # Si on clique sur le même message qui est déjà en cours de lecture : on arrête tout
         if self.tts_manager.is_playing and self.current_tts_tag == tag_id:
@@ -2479,7 +2724,7 @@ Note : Shift + Entrée pour un saut de ligne."""
         """Affiche une boîte de dialogue pour configurer la mémoire et la taille du contexte."""
         dialog = tk.Toplevel(self.root)
         dialog.title("Réglages de l'application")
-        dialog.geometry("450x510")
+        dialog.geometry("450x640")
         dialog.configure(bg="#1e1e1e")
         dialog.transient(self.root)
         dialog.grab_set()
@@ -2655,6 +2900,60 @@ Note : Shift + Entrée pour un saut de ligne."""
         )
         r_small.pack(anchor="w", padx=20, pady=(2, 15))
 
+        # Section TTS (Synthèse vocale)
+        tk.Label(dialog, text="🔊 SYNTHÈSE VOCALE (TTS) :", bg="#1e1e1e", fg="#bb86fc", font=("Arial", 9, "bold")).pack(anchor="w", padx=20, pady=(5, 5))
+        
+        # Obtenir la voix sélectionnée ou par défaut
+        current_voice = self.ctrl.settings.get_setting("selected_tts_voice", "fr_FR-upmc-medium")
+        tts_var = tk.StringVar(value=current_voice)
+        
+        has_tts_deps = self.tts_manager.has_deps if self.tts_manager else False
+        
+        tts_frame = tk.Frame(dialog, bg="#1e1e1e")
+        tts_frame.pack(fill="x", padx=20, pady=(0, 10))
+        
+        if not has_tts_deps:
+            warn_lbl = tk.Label(tts_frame, text="⚠️ Dépendances de synthèse vocale manquantes.\n(sounddevice, numpy, piper-tts)", bg="#1e1e1e", fg="#ffb74d", justify="left", anchor="w")
+            warn_lbl.pack(anchor="w", pady=(0, 5))
+            
+            def install_from_dialog():
+                dialog.destroy()
+                self.install_tts_dependencies()
+                
+            inst_btn = tk.Button(tts_frame, text="📥 Installer les dépendances", command=install_from_dialog, bg="#bb86fc", fg="black", activebackground="#c79cfd", relief="flat", padx=10, pady=3)
+            inst_btn.pack(anchor="w")
+        else:
+            voice_options = {voice_id: info["name"] for voice_id, info in self.tts_manager.PIPER_VOICES.items()}
+            
+            desc_lbl = tk.Label(tts_frame, text="", bg="#1e1e1e", fg="#888888", font=("Arial", 8, "italic"), justify="left", anchor="w", wraplength=400)
+            
+            def update_tts_desc(*args):
+                vid = tts_var.get()
+                info = self.tts_manager.PIPER_VOICES.get(vid)
+                if info:
+                    installed = vid in self.tts_manager.get_voices()
+                    inst_str = " (Installée)" if installed else " (Non installée)"
+                    desc_lbl.config(text=f"Sexe : {info['gender']} | Qualité : {info['realism']} | Taille : {info['size']}{inst_str}\n{info['description']}")
+            
+            tts_var.trace_add("write", update_tts_desc)
+            
+            voice_menu = tk.OptionMenu(tts_frame, tts_var, *voice_options.keys(), command=lambda vid: self.select_voice_from_settings(vid, dialog, tts_var))
+            voice_menu.configure(bg="#333333", fg="white", activebackground="#444444", activeforeground="white", relief="flat", highlightthickness=0, bd=0)
+            voice_menu["menu"].configure(bg="#333333", fg="white", activebackground="#03dac6", activeforeground="black")
+            
+            # Remplacer les identifiants techniques par les libellés conviviaux
+            menu_widget = voice_menu.nametowidget(voice_menu.cget("menu"))
+            menu_widget.delete(0, "end")
+            for voice_id, name in voice_options.items():
+                installed = voice_id in self.tts_manager.get_voices()
+                inst_suffix = "" if installed else " [Non installé]"
+                menu_widget.add_command(label=f"{name}{inst_suffix}", command=tk._setit(tts_var, voice_id, lambda vid=voice_id: self.select_voice_from_settings(vid, dialog, tts_var)))
+                
+            voice_menu.pack(anchor="w", pady=(0, 5))
+            desc_lbl.pack(fill="x", anchor="w", pady=(2, 0))
+            
+            update_tts_desc()
+
         # Boutons Sauvegarder et Fermer
         btn_frame = tk.Frame(dialog, bg="#1e1e1e")
         btn_frame.pack(fill="x", padx=20, pady=(10, 0))
@@ -2674,6 +2973,15 @@ Note : Shift + Entrée pour un saut de ligne."""
                     # Mettre à jour visuellement le bouton micro de la GUI
                     self.mic_button.config(text="🔄", state="disabled")
                     self.stt_manager.change_model(new_stt_model)
+            
+            # Gérer le changement de voix TTS
+            if has_tts_deps:
+                new_voice = tts_var.get()
+                old_voice = self.ctrl.settings.get_setting("selected_tts_voice", "fr_FR-upmc-medium")
+                if new_voice != old_voice:
+                    if new_voice in self.tts_manager.get_voices():
+                        self.tts_manager.load_voice(new_voice)
+                        self.ctrl.settings.set_setting("selected_tts_voice", new_voice)
                     
             messagebox.showinfo("Succès", "Configuration sauvegardée avec succès !", parent=dialog)
             dialog.destroy()
